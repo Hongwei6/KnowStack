@@ -61,7 +61,7 @@ minio:
 mineru:
   base-url: http://${MINERU_HOST:10.244.0.110}:7860
 
-# XXL-Job（T480s xxl-job-admin 2.3.0，http://10.244.0.111:28080/xxl-job-admin）
+# XXL-Job（T480s，Admin 与客户端目标版本 2.4.2）
 xxl:
   job:
     admin:
@@ -71,6 +71,14 @@ xxl:
       port: 9999
     accessToken: default_token
 
-# 通义千问（qwen 系列 + text-embedding-v4）
-dashscope:
-  api-key: ${DASHSCOPE_API_KEY}
+# Yoga Ollama（1024 维；现有 1536 维 ES 索引需重建后才能写入）
+embedding:
+  base-url: http://${EMBEDDING_HOST:10.244.0.110}:11434
+  model: qwen3-embedding:4b
+  dimensions: 1024
+
+# DeepSeek OpenAI 兼容 API
+deepseek:
+  base-url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  api-key: ${DEEPSEEK_API_KEY}
