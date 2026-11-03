@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: know-engine
+  # datasource / redis / elasticsearch / neo4j / minio / xxl-job 配置待接入时补充
+
+server:
+  port: 8080
+
+mybatis-plus:
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
