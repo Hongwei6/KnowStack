@@ -57,6 +57,10 @@ minio:
   secret-key: ${MINIO_SECRET_KEY}
   bucket: knowstack
 
+# MinerU 4.1.5（Yoga 10.244.0.110，PDF 解析）
+mineru:
+  base-url: http://${MINERU_HOST:10.244.0.110}:7860
+
 # XXL-Job（T480s xxl-job-admin 2.3.0，http://10.244.0.111:28080/xxl-job-admin）
 xxl:
   job:

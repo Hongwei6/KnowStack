@@ -38,12 +38,15 @@ know-engine/
 | 服务 | 位置 | 地址 | 凭据来源 |
 |---|---|---|---|
 | MySQL 8.4.7 | T480s（10.244.0.111）`1Panel-mysql-qEJL` | 3306 / 库 `knowstack` | `MYSQL_PASSWORD` |
-| Redis（Dify 共用） | T480s `docker-redis-1` | 6379 | `REDIS_PASSWORD` |
+| Redis（Dify 共用，db2） | T480s `docker-redis-1` | 6379 | `REDIS_PASSWORD` |
 | Elasticsearch 8.19.10（IK） | T480s `elasticsearch` | 9200 | 无认证 |
 | Neo4j 5.22-community | T480s `neo4j` | bolt 7687 | `NEO4J_PASSWORD` |
 | XXL-Job Admin 2.3.0 | T480s `xxl-job-admin` | 28080 | accessToken: default_token |
 | MinIO | debian（10.244.0.102）`1Panel-minio-tKMN` | 9000（API）/ 9001（控制台） | `MINIO_ACCESS_KEY`/`MINIO_SECRET_KEY` |
+| MinerU 4.1.5 | Yoga（10.244.0.110） | HTTP 7860 | 暂无客户端接入，仅配置 `mineru.base-url` |
 
 本机开发：复制凭据到 `src/main/resources/application-local.yml`（已 gitignore），再 `mvn spring-boot:run`。
+
+数据库初始文件：`src/main/resources/sql/tables.sql`、`retrieve_tables.sql`（MySQL `knowstack` 库）及 `src/main/resources/neo4j/test-data.cypher`（测试图数据，使用 `MERGE`，不会清空已有节点）。需要时手动执行；应用启动不自动导入。
 
 > 注意：XXL-Job 执行器客户端（2.4.x）与 Admin（2.3.0）版本不一致，接入前建议升级 Admin 或降级客户端。
