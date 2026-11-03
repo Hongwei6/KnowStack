@@ -27,6 +27,7 @@ spring:
       host: ${REDIS_HOST:10.244.0.111}
       port: 6379
       password: ${REDIS_PASSWORD}
+      database: 2
 
   # Elasticsearch（T480s es-ik:8.19.10，含 IK 分词）
   elasticsearch:
