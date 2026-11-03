@@ -1,7 +1,43 @@
 spring:
   application:
     name: know-engine
-  # datasource / redis / elasticsearch / neo4j / minio / xxl-job 配置待接入时补充
+  profiles:
+    active: local   # 凭据见 application-local.yml（已 gitignore）
+
+  # MySQL（T480s 1Panel-mysql-qEJL, 8.4.7）
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:10.244.0.111}:3306/knowstack?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD}
+    type: com.alibaba.druid.pool.DruidDataSource
+    druid:
+      initial-size: 2
+      min-idle: 2
+      max-active: 10
+      stat-view-servlet:
+        enabled: true
+        url-pattern: /druid/*
+        login-username: ${DRUID_USERNAME:admin}
+        login-password: ${DRUID_PASSWORD}
+
+  # Redis（T480s docker-redis-1，需密码）
+  data:
+    redis:
+      host: ${REDIS_HOST:10.244.0.111}
+      port: 6379
+      password: ${REDIS_PASSWORD}
+
+  # Elasticsearch（T480s es-ik:8.19.10，含 IK 分词）
+  elasticsearch:
+    uris: http://${ES_HOST:10.244.0.111}:9200
+
+  # Neo4j（T480s neo4j:5.22-community）
+  neo4j:
+    uri: bolt://${NEO4J_HOST:10.244.0.111}:7687
+    authentication:
+      username: ${NEO4J_USERNAME:neo4j}
+      password: ${NEO4J_PASSWORD}
 
 server:
   port: 8080
@@ -12,3 +48,24 @@ mybatis-plus:
       logic-delete-field: deleted
       logic-delete-value: 1
       logic-not-delete-value: 0
+
+# MinIO（debian 1Panel-minio-tKMN）
+minio:
+  endpoint: http://${MINIO_HOST:10.244.0.102}:9000
+  access-key: ${MINIO_ACCESS_KEY}
+  secret-key: ${MINIO_SECRET_KEY}
+  bucket: knowstack
+
+# XXL-Job（T480s xxl-job-admin 2.3.0，http://10.244.0.111:28080/xxl-job-admin）
+xxl:
+  job:
+    admin:
+      addresses: http://${XXL_JOB_HOST:10.244.0.111}:28080/xxl-job-admin
+    executor:
+      appname: know-engine
+      port: 9999
+    accessToken: default_token
+
+# 通义千问（qwen 系列 + text-embedding-v4）
+dashscope:
+  api-key: ${DASHSCOPE_API_KEY}
