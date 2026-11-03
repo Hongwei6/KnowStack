@@ -49,4 +49,6 @@ know-engine/
 
 数据库初始文件：`src/main/resources/sql/tables.sql`、`retrieve_tables.sql`（MySQL `knowstack` 库）及 `src/main/resources/neo4j/test-data.cypher`（测试图数据，使用 `MERGE`，不会清空已有节点）。需要时手动执行；应用启动不自动导入。
 
+持久化模型按 `tables.sql` 的 12 张表建立：`document/entity|mapper`（文档、版本、片段、表元数据）、`chat/entity|mapper`（会话、消息）、`business/entity|mapper`（车辆、订单、员工、用户）及 `rag/entity|mapper`（问答缓存）。Mapper 继承 MyBatis-Plus `BaseMapper`，由应用入口统一扫描；`lock_version` 启用乐观锁，带 `deleted` 字段的表启用逻辑删除。SQL `JSON` 列在实体中保留原始 JSON 字符串，不自动解析为对象。
+
 > 注意：XXL-Job 执行器客户端（2.4.x）与 Admin（2.3.0）版本不一致，接入前建议升级 Admin 或降级客户端。
