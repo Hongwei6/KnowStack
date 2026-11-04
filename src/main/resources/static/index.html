@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KnowStack 知识库 · 文档上传</title>
+<style>
+  :root { --border:#e2e8f0; --muted:#64748b; --accent:#2563eb; --ok:#16a34a; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background:#f8fafc; margin:0; color:#0f172a; }
+  .wrap { max-width: 640px; margin: 48px auto; padding: 0 16px; }
+  h1 { font-size: 22px; }
+  .card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:24px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:14px 0 6px; }
+  input { width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:8px; font-size:14px; }
+  button { margin-top:20px; width:100%; padding:11px; background:var(--accent); color:#fff; border:0; border-radius:8px; font-size:15px; cursor:pointer; }
+  button:disabled { opacity:.55; cursor:not-allowed; }
+  .msg { margin-top:14px; font-size:13px; }
+  .msg.error { color:#dc2626; }
+  ol.steps { list-style:none; padding:0; margin:16px 0 0; }
+  .steps li { padding:7px 0 7px 30px; position:relative; font-size:14px; color:var(--muted); }
+  .steps li::before { content:"○"; position:absolute; left:6px; color:var(--muted); }
+  .steps li.doing::before { content:"●"; color:var(--accent); animation: pulse 1s infinite alternate; }
+  .steps li.done { color:#0f172a; }
+  .steps li.done::before { content:"✓"; color:var(--ok); font-weight:700; }
+  @keyframes pulse { from { opacity:.4; } to { opacity:1; } }
+  .meta { font-size:12px; color:var(--muted); margin-top:10px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>📚 知识库文档上传</h1>
+  <div class="card">
+    <form id="uploadForm">
+      <label for="file">PDF 文件</label>
+      <input type="file" id="file" accept=".pdf,application/pdf" required>
+      <label for="uploadUser">上传用户</label>
+      <input type="text" id="uploadUser" required placeholder="例如 hongwei">
+      <label for="accessibleBy">可见范围（可选）</label>
+      <input type="text" id="accessibleBy" placeholder="例如 ADMIN，留空表示公开">
+      <button type="submit" id="btn">上传并构建索引</button>
+    </form>
+    <div class="msg" id="msg"></div>
+    <div id="progress" hidden>
+      <ol class="steps" id="steps"></ol>
+      <div class="meta" id="meta"></div>
+    </div>
+  </div>
+</div>
+<script>
+const STAGES = ["UPLOADED","CONVERTING","CONVERTED","CHUNKED","VECTOR_STORED"];
+const STAGE_LABEL = {
+  UPLOADED:"上传完成（MinIO）", CONVERTING:"MinerU 解析为 Markdown（含图片）",
+  CONVERTED:"转换完成", CHUNKED:"分块完成", VECTOR_STORED:"向量化并写入向量库"
+};
+const $ = id => document.getElementById(id);
+
+$("uploadForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const file = $("file").files[0];
+  if (!file) return;
+  $("btn").disabled = true;
+  $("msg").className = "msg";
+  $("msg").textContent = "上传中…";
+  $("progress").hidden = true;
+  try {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("uploadUser", $("uploadUser").value.trim());
+    const accessibleBy = $("accessibleBy").value.trim();
+    if (accessibleBy) body.append("accessibleBy", accessibleBy);
+    const res = await fetch("/api/documents/upload", { method: "POST", body });
+    const doc = await res.json();
+    if (!res.ok) throw new Error(doc.error || ("HTTP " + res.status));
+    $("msg").textContent = "已上传，docId=" + doc.docId + "，索引构建中…";
+    poll(doc.docId, file.name);
+  } catch (err) {
+    $("msg").className = "msg error";
+    $("msg").textContent = "上传失败：" + err.message;
+    $("btn").disabled = false;
+  }
+});
+
+function poll(docId, fileName) {
+  $("progress").hidden = false;
+  const timer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/documents/" + docId);
+      const doc = await res.json();
+      if (!res.ok) throw new Error(doc.error || ("HTTP " + res.status));
+      render(doc);
+      if (doc.status === "VECTOR_STORED" || doc.status === "STORED") {
+        clearInterval(timer);
+        $("msg").textContent = "✅ 索引构建完成";
+        $("btn").disabled = false;
+      }
+    } catch (err) {
+      clearInterval(timer);
+      $("msg").className = "msg error";
+      $("msg").textContent = "状态查询失败：" + err.message;
+      $("btn").disabled = false;
+    }
+  }, 2000);
+}
+
+function render(doc) {
+  const idx = STAGES.indexOf(doc.status);
+  $("steps").innerHTML = STAGES.map((s, i) => {
+    const cls = i < idx ? "done" : (i === idx ? "done doing" : "");
+    return '<li class="' + cls + '">' + STAGE_LABEL[s] + "</li>";
+  }).join("");
+  const created = doc.createdAt ? "，开始于 " + doc.createdAt.replace("T", " ").slice(0, 19) : "";
+  $("meta").textContent = "文档：" + doc.docTitle + created;
+}
+</script>
+</body>
+</html>

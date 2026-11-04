@@ -3,6 +3,7 @@ package com.knowstack.engine;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 @MapperScan({
     "com.knowstack.engine.document.mapper",
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
     "com.knowstack.engine.rag.mapper"
 })
 @SpringBootApplication
+@EnableAsync
 public class KnowEngineApplication {
 
     public static void main(String[] args) {

@@ -40,6 +40,12 @@ spring:
       username: ${NEO4J_USERNAME:neo4j}
       password: ${NEO4J_PASSWORD}
 
+  # 文档上传大小限制
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
 server:
   port: 8080
 
@@ -57,9 +63,14 @@ minio:
   secret-key: ${MINIO_SECRET_KEY}
   bucket: knowstack
 
-# MinerU 4.1.5（Yoga 10.244.0.110，PDF 解析）
+# MinerU 4.1.5 FastAPI（Yoga 10.244.0.110，POST /file_parse，ZIP+图片模式）
 mineru:
-  base-url: http://${MINERU_HOST:10.244.0.110}:7860
+  base-url: http://${MINERU_HOST:10.244.0.110}:8000
+
+# Yoga Ollama 视觉模型（生成 Markdown 中图片的描述）
+vision:
+  base-url: http://${VISION_HOST:10.244.0.110}:11434
+  model: qwen3-vl:8b
 
 # XXL-Job（T480s，Admin 与客户端目标版本 2.4.2）
 xxl:
@@ -76,6 +87,10 @@ embedding:
   base-url: http://${EMBEDDING_HOST:10.244.0.110}:11434
   model: qwen3-embedding:4b
   dimensions: 1024
+
+# 向量库（复用 spring.elasticsearch.uris，索引按 embedding.dimensions 自动建 mapping）
+vector-store:
+  index: knowstack_chunks
 
 # DeepSeek OpenAI 兼容 API
 deepseek:
