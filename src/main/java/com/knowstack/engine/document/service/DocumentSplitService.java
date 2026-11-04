@@ -13,6 +13,7 @@ import com.knowstack.engine.document.event.DocumentEvents;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
 import com.knowstack.engine.document.mapper.KnowledgeSegmentMapper;
+import com.knowstack.engine.infra.snowflake.SnowflakeIdGenerator;
 import com.knowstack.engine.rag.modules.splitter.DocumentSplitterFactory;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
@@ -119,8 +120,12 @@ public class DocumentSplitService {
                 .eq(KnowledgeSegment::getDocumentId, documentId));
         for (int i = 0; i < segments.size(); i++) {
             TextSegment segment = segments.get(i);
+            String chunkId = segment.metadata().getString("chunkId");
+            if (chunkId == null) {
+                chunkId = SnowflakeIdGenerator.getInstance().nextIdStr();
+            }
             Map<String, Object> metadataMap = new LinkedHashMap<>();
-            metadataMap.put("chunkId", segment.metadata().getString("chunkId"));
+            metadataMap.put("chunkId", chunkId);
             String parentChunkId = segment.metadata().getString("parentChunkId");
             if (parentChunkId != null) {
                 metadataMap.put("parentChunkId", parentChunkId);
@@ -129,7 +134,7 @@ public class DocumentSplitService {
 
             KnowledgeSegment knowledgeSegment = new KnowledgeSegment();
             knowledgeSegment.setText(segment.text());
-            knowledgeSegment.setChunkId(segment.metadata().getString("chunkId"));
+            knowledgeSegment.setChunkId(chunkId);
             knowledgeSegment.setMetadata(JSON.toJSONString(metadataMap));
             knowledgeSegment.setDocumentId(documentId);
             knowledgeSegment.setDocumentVersion(version.getVersionId());

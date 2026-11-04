@@ -50,7 +50,7 @@ create TABLE IF NOT EXISTS `knowledge_document_version` (
 create TABLE IF NOT EXISTS `knowledge_segment` (
     `id`          BIGINT       NOT NULL AUTO_INCREMENT comment '片段ID',
     `text`        LONGTEXT     NOT NULL comment '文本内容',
-    `chunk_id`    VARCHAR(255) NULL     comment '分片ID',
+    `chunk_id`    VARCHAR(255) NOT NULL comment '全局唯一分片ID（雪花算法）',
     `metadata`    VARCHAR(2048) NULL     comment '元数据',
     `document_id` BIGINT       NOT NULL comment '所属文档ID',
     `document_version` BIGINT       NULL     comment '所属文档版本ID（knowledge_document_version.version_id）',
@@ -63,6 +63,7 @@ create TABLE IF NOT EXISTS `knowledge_segment` (
     `lock_version`  INT          NOT NULL DEFAULT 0 comment '乐观锁版本号',
     `deleted`       TINYINT      NOT NULL DEFAULT 0 comment '是否删除：0-未删除，1-已删除',
     PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_chunk_id` (`chunk_id`),
     -- 文档ID索引
     INDEX `idx_document_id` (`document_id`),
     -- 复合索引：文档ID+顺序，优化按文档查询并排序

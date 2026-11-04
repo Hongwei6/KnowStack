@@ -7,7 +7,7 @@ spring:
   # MySQL（T480s 1Panel-mysql-qEJL, 8.4.7）
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://${MYSQL_HOST:10.244.0.111}:3306/knowstack?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://${MYSQL_HOST:10.244.0.111}:3306/knowstack?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
     username: ${MYSQL_USERNAME:root}
     password: ${MYSQL_PASSWORD}
     type: com.alibaba.druid.pool.DruidDataSource

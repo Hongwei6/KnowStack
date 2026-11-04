@@ -1,5 +1,6 @@
 package com.knowstack.engine.rag.modules.splitter;
 
+import com.knowstack.engine.infra.snowflake.SnowflakeIdGenerator;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.Metadata;
@@ -8,7 +9,6 @@ import dev.langchain4j.data.segment.TextSegment;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,25 +49,26 @@ public class MarkdownHeaderParentTextSplitter implements DocumentSplitter {
         Pattern header = Pattern.compile("^(#{1," + titleLevel + "})\\s+.*");
         List<TextSegment> result = new ArrayList<>();
         for (String section : splitByHeaders(document.text(), header)) {
-            String parentId = UUID.randomUUID().toString();
+            String parentId = includeParent ? SnowflakeIdGenerator.getInstance().nextIdStr() : null;
             String childText = keepHeaderInChild ? section : stripHeader(section, header);
             if (includeParent) {
-                result.add(TextSegment.from(section, metadata(parentId, null)));
+                result.add(TextSegment.from(section, metadata(parentId, null, true)));
             }
             for (TextSegment child : childSplitter.split(Document.from(childText))) {
-                result.add(TextSegment.from(child.text(), metadata(UUID.randomUUID().toString(), parentId)));
+                result.add(TextSegment.from(child.text(), metadata(
+                        SnowflakeIdGenerator.getInstance().nextIdStr(), parentId, false)));
             }
         }
         return result;
     }
 
-    private Metadata metadata(String chunkId, String parentChunkId) {
+    private Metadata metadata(String chunkId, String parentChunkId, boolean skipEmbedding) {
         Metadata metadata = new Metadata();
         metadata.put("chunkId", chunkId);
         if (parentChunkId != null) {
             metadata.put("parentChunkId", parentChunkId);
         }
-        metadata.put("skipEmbedding", parentChunkId == null ? 1 : 0);
+        metadata.put("skipEmbedding", skipEmbedding ? 1 : 0);
         return metadata;
     }
 

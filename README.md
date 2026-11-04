@@ -58,3 +58,7 @@ know-engine/
 PDF 上传：`POST /api/documents/upload` 将原文件存 MinIO、文档/版本记录写 MySQL，事务提交后发布 `Uploaded` 事件。`document/event/DocumentEventListener` 的异步处理器接力：`Uploaded` → MinerU 解析 PDF、图片描述与 Markdown 存储 → `Converted` → `DocumentSplitService` 保存有序父子分段 → `Chunked` → `SegmentEmbeddingService` 写 Elasticsearch，状态到 `VECTOR_STORED`。事件只携带文档 ID，原始 PDF 从 MinIO 读取；每阶段按持久化状态幂等判定，同一文档使用 Redisson 锁 `document:processing:{id}`。`document/job/DocumentStageRecoveryJob` 由 XXL-Job 触发，扫描超时状态并补发事件（上传/转换/分段超过 1 分钟，转换中超过 15 分钟）；进程内事件不依赖消息队列，数据库状态负责重启补偿。手动切分遇占用返回 HTTP 409，切分事务提交后再发 `Chunked` 事件。
 
 XXL-Job Admin 已创建并启用自动注册执行器 `know-engine` 下的 BEAN 任务 `documentStageRecovery`，Cron `0 * * * * ?`（每分钟一次），阻塞策略“单机串行”。`config/XxlJobConfig` 注册执行器（默认端口 `9999`）；Admin 必须能回连该端口。多网卡/代理环境用 `XXL_JOB_EXECUTOR_IP` 指定 Admin 可达的 IP，避免自动注册到代理地址。Admin 未配置/任务未启动时**不会**自动补发。通过 Admin 的“执行一次”和调度日志核验任务运行，阶段处理结果仍以应用日志及文档状态为准。
+
+XXL-Job 只扫描状态并补发事件，不在扫描器内执行转换、切分或向量化。补发事件与实时 listener 撞车时，处理阶段共用 `document:processing:{id}` 的 Redisson 非阻塞锁：拿不到锁就跳过本次重复事件，下次定时扫描仍可补偿未完成的持久化状态；拿到锁后重新读取文档状态再决定是否执行。切分事务在持锁期间提交，不靠对扫描器或用户单独加锁。
+
+切分时父子段和无内置 ID 的普通切分段统一生成雪花 `chunkId`；子段 `metadata.parentChunkId` 指向已保存的父段 ID，向量 ID 使用子段 `chunkId`。多实例部署必须为每个实例设置不同的 `SNOWFLAKE_WORKER_ID`（0–1023，重启后也不能与同时运行的实例重复）；未设置时按 PID 低 10 位回退，仅适合单实例开发。`sql/tables.sql` 对新建库设 `chunk_id NOT NULL UNIQUE`；已建库不会自动改表，先检查历史空值/重复值及 ES 向量引用，必要时重切旧文档，再手动加唯一索引，不能直接对旧段改 ID 而不更新向量引用。

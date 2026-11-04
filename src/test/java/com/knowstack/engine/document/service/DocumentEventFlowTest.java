@@ -1,5 +1,6 @@
 package com.knowstack.engine.document.service;
 
+import com.alibaba.fastjson2.JSON;
 import com.knowstack.engine.document.constant.DocumentStatus;
 import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.entity.KnowledgeDocumentVersion;
@@ -136,6 +137,14 @@ class DocumentEventFlowTest {
         assertThat(document.getStatus()).isEqualTo(DocumentStatus.VECTOR_STORED);
         assertThat(version.getStatus()).isEqualTo(DocumentStatus.VECTOR_STORED);
         assertThat(saved).anyMatch(segment -> segment.getSkipEmbedding() == 0 && segment.getEmbeddingId() != null);
+        assertThat(saved).extracting(KnowledgeSegment::getChunkId).doesNotHaveDuplicates();
+        assertThat(saved).allSatisfy(segment -> assertThat(segment.getChunkId()).matches("\\d+"));
+        assertThat(saved).filteredOn(segment -> segment.getSkipEmbedding() == 0)
+                .allSatisfy(child -> assertThat(saved).anySatisfy(parent -> {
+                    assertThat(parent.getSkipEmbedding()).isEqualTo(1);
+                    assertThat(parent.getChunkId()).isEqualTo(
+                            JSON.parseObject(child.getMetadata()).getString("parentChunkId"));
+                }));
         verify(store).addAll(anyList(), anyList(), anyList());
         listener.get().onUploaded(new DocumentEvents.Uploaded(7L));
         verify(mineru, times(2)).parseToZip(eq("example.pdf"), any(byte[].class));

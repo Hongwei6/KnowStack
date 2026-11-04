@@ -3,6 +3,9 @@ package com.knowstack.engine.document.service;
 import com.knowstack.engine.document.constant.DocumentStatus;
 import com.knowstack.engine.document.controller.DocumentController;
 import com.knowstack.engine.document.entity.KnowledgeDocumentVersion;
+import com.knowstack.engine.document.event.DocumentEventListener;
+import com.knowstack.engine.document.event.DocumentEvents;
+import com.knowstack.engine.document.job.DocumentStageRecoveryJob;
 import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
@@ -123,6 +126,51 @@ class DocumentProcessingLockTest {
             assertThatThrownBy(() -> first.get(5, TimeUnit.SECONDS))
                     .hasCauseInstanceOf(IllegalStateException.class);
             assertThat(processingLock.execute(7L, () -> "可以重试")).isEqualTo("可以重试");
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void recoveryAndListenerDoNotEmbedTheSameDocumentConcurrently() throws Exception {
+        KnowledgeDocument document = new KnowledgeDocument();
+        document.setDocId(7L);
+        document.setStatus(DocumentStatus.CHUNKED);
+        document.setCurrentVersionId(1L);
+        document.setDocTitle("example.pdf");
+        KnowledgeDocumentMapper documents = mock(KnowledgeDocumentMapper.class);
+        when(documents.selectById(7L)).thenReturn(document);
+        when(documents.selectList(any())).thenReturn(java.util.List.of(document));
+        SegmentEmbeddingService embedding = mock(SegmentEmbeddingService.class);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("等待超时");
+            }
+            document.setStatus(DocumentStatus.VECTOR_STORED);
+            return null;
+        }).when(embedding).embed(eq(7L), eq(1L), any());
+        DocumentEventListener listener = new DocumentEventListener(mock(DocumentIngestService.class),
+                mock(DocumentSplitService.class), embedding, processingLock, documents);
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        doAnswer(invocation -> {
+            listener.onChunked(invocation.getArgument(0));
+            return null;
+        }).when(events).publishEvent(any(DocumentEvents.Chunked.class));
+        DocumentStageRecoveryJob job = new DocumentStageRecoveryJob(documents, events);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> first = executor.submit(() -> listener.onChunked(new DocumentEvents.Chunked(7L)));
+            assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();
+            job.recover(); // 定时扫描读到旧 CHUNKED 状态，也只能发布事件，不能并发向量化
+            verify(embedding, times(1)).embed(eq(7L), eq(1L), any());
+            release.countDown();
+            first.get(5, TimeUnit.SECONDS);
+            job.recover(); // 锁释放后必须重读状态，不得重复向量化
+            verify(embedding, times(1)).embed(eq(7L), eq(1L), any());
         } finally {
             release.countDown();
             executor.shutdownNow();

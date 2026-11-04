@@ -89,7 +89,7 @@ public class SnowflakeIdGenerator {
         if (instance == null) {
             synchronized (SnowflakeIdGenerator.class) {
                 if (instance == null) {
-                    // 默认使用进程ID作为workerId
+                    // 多实例必须分别配置 SNOWFLAKE_WORKER_ID；PID 回退仅适用于单实例开发。
                     long workerId = getWorkerId();
                     instance = new SnowflakeIdGenerator(workerId);
                 }
@@ -100,11 +100,15 @@ public class SnowflakeIdGenerator {
 
     /**
      * 获取工作机器ID
-     * 默认使用进程ID的低10位
+     * 多实例通过 SNOWFLAKE_WORKER_ID 指定独立的 workerId；单实例开发回退到进程ID低10位
      *
      * @return 工作机器ID
      */
     private static long getWorkerId() {
+        String configured = System.getenv("SNOWFLAKE_WORKER_ID");
+        if (configured != null && !configured.isBlank()) {
+            return Long.parseLong(configured);
+        }
         try {
             String processName = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
             if (processName != null && processName.contains("@")) {
