@@ -8,7 +8,7 @@ import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.scheduling.annotation.Scheduled;
+import com.xxl.job.core.handler.annotation.XxlJob;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -23,7 +23,7 @@ public class DocumentStageRecoveryJob {
     private final KnowledgeDocumentMapper documentMapper;
     private final ApplicationEventPublisher events;
 
-    @Scheduled(fixedDelayString = "${document.recovery-interval-ms:60000}", initialDelayString = "${document.recovery-interval-ms:60000}")
+    @XxlJob("documentStageRecovery")
     public void recover() {
         LocalDateTime now = LocalDateTime.now();
         Long lastId = null;
