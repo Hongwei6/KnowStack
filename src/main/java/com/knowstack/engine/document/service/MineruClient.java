@@ -1,6 +1,7 @@
 package com.knowstack.engine.document.service;
 
-import lombok.extern.slf4j.Slf4j;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -11,76 +12,84 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
-import java.util.UUID;
+import java.util.Map;
 
-/**
- * MinerU FastAPI 客户端
- * 调用 POST /file_parse，response_format_zip=true + return_images=true，
- * 返回包含 Markdown 与图片的 ZIP，避免 fast api 默认只返回 markdown 丢失图片的问题
- */
-@Slf4j
+/** MinerU 4.x 自托管 API：创建任务、上传 PDF、等待解析并下载结果 ZIP。 */
 @Service
 public class MineruClient {
 
-    private final HttpClient http = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .build();
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    private final ObjectMapper mapper;
     private final String baseUrl;
 
-    public MineruClient(@Value("${mineru.base-url}") String baseUrl) {
+    public MineruClient(@Value("${mineru.base-url}") String baseUrl, ObjectMapper mapper) {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
+        this.mapper = mapper;
     }
 
-    /**
-     * 解析 PDF，返回 ZIP 字节数组（内含 .md 文件与图片文件）
-     */
     public byte[] parseToZip(String fileName, byte[] pdf) {
-        if (!fileName.toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+        if (fileName == null || !fileName.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) {
             throw new IllegalArgumentException("MinerU conversion requires a PDF file");
         }
-        String boundary = UUID.randomUUID().toString();
-        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl + "/file_parse"))
-                .timeout(Duration.ofMinutes(10))
-                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-                .POST(HttpRequest.BodyPublishers.ofByteArrays(multipart(boundary, fileName, pdf)))
-                .build();
-        log.info("调用 MinerU 解析: {}, 文件大小 {} bytes", baseUrl + "/file_parse", pdf.length);
         try {
-            HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
-            if (response.statusCode() != 200) {
-                String body = new String(response.body(), StandardCharsets.UTF_8);
-                log.error("MinerU 解析失败，状态码: {}, 响应: {}", response.statusCode(), body);
-                throw new IOException("MinerU 解析失败: HTTP " + response.statusCode());
+            byte[] body = mapper.writeValueAsBytes(Map.of("tier", "standard", "files",
+                    java.util.List.of(Map.of("file_name", fileName, "bytes", pdf.length))));
+            JsonNode created = json(HttpRequest.newBuilder(uri("/v1/tasks"))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), 202);
+            String taskId = created.path("task_id").asText();
+            JsonNode upload = created.path("files").path(0).path("upload");
+            if (taskId.isBlank() || upload.path("url").asText().isBlank()) {
+                throw new IOException("MinerU 未返回任务 ID 或上传地址: " + created);
             }
-            log.info("MinerU 解析成功，ZIP 大小 {} bytes", response.body().length);
-            return response.body();
+            HttpRequest.Builder uploadRequest = HttpRequest.newBuilder(uri(upload.path("url").asText()))
+                    .timeout(Duration.ofMinutes(2)).PUT(HttpRequest.BodyPublishers.ofByteArray(pdf));
+            upload.path("headers").fields().forEachRemaining(header -> uploadRequest.header(header.getKey(), header.getValue().asText()));
+            response(uploadRequest.build(), 200);
+
+            long deadline = System.nanoTime() + Duration.ofMinutes(10).toNanos();
+            while (System.nanoTime() < deadline) {
+                JsonNode task = json(HttpRequest.newBuilder(uri("/v1/tasks/" + taskId))
+                        .timeout(Duration.ofSeconds(15)).GET().build(), 200);
+                JsonNode file = task.path("files").path(0);
+                if ("completed".equals(file.path("status").asText())) {
+                    String resultUrl = file.path("result_url").asText();
+                    if (resultUrl.isBlank()) throw new IOException("MinerU 完成但未提供结果下载地址: " + task);
+                    return response(HttpRequest.newBuilder(uri(resultUrl))
+                            .timeout(Duration.ofMinutes(2)).GET().build(), 200);
+                }
+                if ("failed".equals(file.path("status").asText()) || "canceled".equals(file.path("status").asText())) {
+                    throw new IOException("MinerU 文件解析失败: " + file.path("error"));
+                }
+                if ("failed".equals(task.path("status").asText()) || "canceled".equals(task.path("status").asText())) {
+                    throw new IOException("MinerU 任务失败: " + task.path("error"));
+                }
+                Thread.sleep(2000);
+            }
+            throw new IOException("MinerU 任务超时: " + taskId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("MinerU 解析被中断", e);
+            throw new IllegalStateException("MinerU 解析被中断", e);
         } catch (IOException e) {
-            throw new RuntimeException("MinerU 解析失败: " + e.getMessage(), e);
+            throw new IllegalStateException("MinerU 解析失败: " + e.getMessage(), e);
         }
     }
 
-    /**
-     * 手工构建 multipart/form-data：files 文件 + backend/response_format_zip/return_images 等参数
-     */
-    private List<byte[]> multipart(String boundary, String fileName, byte[] pdf) {
-        String prefix = "--" + boundary + "\r\n";
-        String suffix = "\r\n";
-        List<byte[]> parts = new ArrayList<>();
-        parts.add((prefix + "Content-Disposition: form-data; name=\"files\"; filename=\"" + fileName + "\"\r\n"
-                + "Content-Type: application/pdf\r\n\r\n").getBytes(StandardCharsets.UTF_8));
-        parts.add(pdf);
-        parts.add((suffix + prefix + "Content-Disposition: form-data; name=\"backend\"\r\n\r\npipeline").getBytes(StandardCharsets.UTF_8));
-        parts.add((suffix + prefix + "Content-Disposition: form-data; name=\"response_format_zip\"\r\n\r\ntrue").getBytes(StandardCharsets.UTF_8));
-        parts.add((suffix + prefix + "Content-Disposition: form-data; name=\"return_images\"\r\n\r\ntrue").getBytes(StandardCharsets.UTF_8));
-        parts.add((suffix + prefix + "Content-Disposition: form-data; name=\"return_model_output\"\r\n\r\nfalse").getBytes(StandardCharsets.UTF_8));
-        parts.add((suffix + prefix + "Content-Disposition: form-data; name=\"return_middle_json\"\r\n\r\nfalse").getBytes(StandardCharsets.UTF_8));
-        parts.add(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
-        return parts;
+    private JsonNode json(HttpRequest request, int expectedStatus) throws IOException, InterruptedException {
+        return mapper.readTree(response(request, expectedStatus));
+    }
+
+    private byte[] response(HttpRequest request, int expectedStatus) throws IOException, InterruptedException {
+        HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        if (response.statusCode() != expectedStatus) {
+            throw new IOException("MinerU HTTP " + response.statusCode() + ": "
+                    + new String(response.body(), StandardCharsets.UTF_8));
+        }
+        return response.body();
+    }
+
+    private URI uri(String path) {
+        URI url = URI.create(path);
+        return url.isAbsolute() ? url : URI.create(baseUrl + (path.startsWith("/") ? path : "/" + path));
     }
 }
