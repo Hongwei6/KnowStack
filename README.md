@@ -62,3 +62,5 @@ XXL-Job Admin 已创建并启用自动注册执行器 `know-engine` 下的 BEAN 
 XXL-Job 只扫描状态并补发事件，不在扫描器内执行转换、切分或向量化。补发事件与实时 listener 撞车时，处理阶段共用 `document:processing:{id}` 的 Redisson 非阻塞锁：拿不到锁就跳过本次重复事件，下次定时扫描仍可补偿未完成的持久化状态；拿到锁后重新读取文档状态再决定是否执行。切分事务在持锁期间提交，不靠对扫描器或用户单独加锁。
 
 切分时父子段和无内置 ID 的普通切分段统一生成雪花 `chunkId`；子段 `metadata.parentChunkId` 指向已保存的父段 ID，向量 ID 使用子段 `chunkId`。多实例部署必须为每个实例设置不同的 `SNOWFLAKE_WORKER_ID`（0–1023，重启后也不能与同时运行的实例重复）；未设置时按 PID 低 10 位回退，仅适合单实例开发。`sql/tables.sql` 对新建库设 `chunk_id NOT NULL UNIQUE`；已建库不会自动改表，先检查历史空值/重复值及 ES 向量引用，必要时重切旧文档，再手动加唯一索引，不能直接对旧段改 ID 而不更新向量引用。
+
+表格入库：统一使用 `POST /api/documents/upload`；后端识别 PDF 走 MinerU，Excel `.xls/.xlsx/.xlsm/.xlt/.xltx/.xltm` 与 UTF-8 `.csv` 走 MySQL 导入。CSV 按 RFC 4180 解析引号、逗号、跨行字段和 UTF-8 BOM；原文件存 MinIO，Excel 首张工作表或 CSV 的首行作为表头，其余行写入 `custom_data_query_<docId>`，列元数据写入 `table_meta`；成功状态为 `STORED`。`.xlsb` 二进制工作簿尚未支持。尚无 Text2SQL 查询接口。MySQL 建表隐式提交，失败时清理新表，但可能保留 `INIT` 文档记录。

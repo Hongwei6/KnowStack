@@ -2,6 +2,7 @@ package com.knowstack.engine.document.job;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.knowstack.engine.document.constant.DocumentStatus;
+import com.knowstack.engine.document.constant.KnowledgeBaseType;
 import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.event.DocumentEvents;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
@@ -35,6 +36,8 @@ public class DocumentStageRecoveryJob {
                             .lt(KnowledgeDocument::getUpdatedAt, now.minusMinutes(1))
                             .or().eq(KnowledgeDocument::getStatus, DocumentStatus.CONVERTING)
                             .lt(KnowledgeDocument::getUpdatedAt, now.minusMinutes(15)))
+                    .and(type -> type.isNull(KnowledgeDocument::getKnowledgeBaseType)
+                            .or().ne(KnowledgeDocument::getKnowledgeBaseType, KnowledgeBaseType.DATA_QUERY))
                     .orderByAsc(KnowledgeDocument::getDocId)
                     .last("LIMIT 100");
             if (lastId != null) {

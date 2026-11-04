@@ -18,6 +18,7 @@ import com.knowstack.engine.document.event.DocumentEvents;
 import com.knowstack.engine.document.service.DocumentProcessingLock;
 import com.knowstack.engine.document.service.DocumentSplitService;
 import com.knowstack.engine.document.service.MinioService;
+import com.knowstack.engine.document.service.impl.ExcelProcessServiceImpl;
 import com.knowstack.engine.document.util.FileTypeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -51,6 +52,7 @@ import java.util.UUID;
 public class DocumentController {
 
     private final MinioService minioService;
+    private final ExcelProcessServiceImpl excelProcessService;
     private final ApplicationEventPublisher events;
     private final DocumentSplitService splitService;
     private final KnowledgeDocumentMapper documentMapper;
@@ -73,8 +75,13 @@ public class DocumentController {
             @RequestParam(value = "accessibleBy", required = false) String accessibleBy,
             @RequestParam(value = "docType", required = false) String docType) throws IOException {
         String fileName = sanitize(file.getOriginalFilename());
-        if (FileTypeUtil.getFileType(fileName, file) != FileType.PDF) {
-            throw new IllegalArgumentException("仅支持 PDF 文件: " + fileName);
+        FileType fileType = FileTypeUtil.getFileType(fileName, file);
+        if (fileType == FileType.CSV || (fileType == FileType.EXCEL
+                && fileName.toLowerCase(Locale.ROOT).matches(".*\\.(xls|xlsx|xlsm|xlt|xltx|xltm)"))) {
+            return uploadExcel(file, uploadUser, accessibleBy, fileName);
+        }
+        if (fileType != FileType.PDF) {
+            throw new IllegalArgumentException("仅支持 PDF、CSV 或 Excel 表格文件: " + fileName);
         }
         byte[] pdf = file.getBytes();
 
@@ -111,6 +118,46 @@ public class DocumentController {
         events.publishEvent(new DocumentEvents.Uploaded(document.getDocId()));
         log.info("发布文档 UPLOADED 事件 docId={}, versionId={}", document.getDocId(), version.getVersionId());
         log.info("文档上传成功 docId={}, title={}, uploadUser={}", document.getDocId(), fileName, uploadUser);
+        return document;
+    }
+
+    /** Excel 同步导入 MySQL，不发布 PDF 流水线事件。 */
+    private KnowledgeDocument uploadExcel(MultipartFile file, String uploadUser,
+                                          String accessibleBy, String fileName) throws IOException {
+        // 文件类型和后缀已由统一上传入口校验
+        if (uploadUser.isBlank()) {
+            throw new IllegalArgumentException("上传用户不能为空");
+        }
+        String lowerName = fileName.toLowerCase(Locale.ROOT);
+        String contentType = lowerName.endsWith(".csv") ? "text/csv"
+                : lowerName.matches(".*\\.(xlsx|xlsm|xltx|xltm)")
+                ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/vnd.ms-excel";
+        String url = minioService.upload(UUID.randomUUID().toString().replace("-", "")
+                + "/source/" + fileName, file.getBytes(), contentType);
+
+        KnowledgeDocument document = new KnowledgeDocument();
+        document.setDocTitle(fileName);
+        document.setStatus(DocumentStatus.INIT);
+        document.setAccessibleBy(accessibleBy);
+        document.setKnowledgeBaseType(KnowledgeBaseType.DATA_QUERY);
+        documentMapper.insert(document);
+
+        KnowledgeDocumentVersion version = new KnowledgeDocumentVersion();
+        version.setDocId(document.getDocId());
+        version.setVersion("1.0.0");
+        version.setDocUrl(url);
+        version.setUploadUser(uploadUser);
+        version.setStatus(DocumentStatus.INIT);
+        versionMapper.insert(version);
+        document.setCurrentVersionId(version.getVersionId());
+        documentMapper.updateById(document);
+
+        excelProcessService.processDocument(document, file.getInputStream());
+        document.setStatus(DocumentStatus.STORED);
+        version.setStatus(DocumentStatus.STORED);
+        versionMapper.updateById(version);
+        documentMapper.updateById(document);
+        log.info("Excel 已入库 docId={}, versionId={}", document.getDocId(), version.getVersionId());
         return document;
     }
 

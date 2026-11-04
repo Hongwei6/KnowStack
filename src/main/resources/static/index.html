@@ -33,22 +33,13 @@
   <h1>📚 知识库文档上传</h1>
   <div class="card">
     <form id="uploadForm">
-      <label for="file">PDF 文件</label>
-      <input type="file" id="file" accept=".pdf,application/pdf" required>
+      <label for="file">PDF、Excel 或 CSV 文件（表格导入 MySQL）</label>
+      <input type="file" id="file" accept=".pdf,.csv,.xls,.xlsx,.xlsm,.xlt,.xltx,.xltm" required>
       <label for="uploadUser">上传用户</label>
       <input type="text" id="uploadUser" required placeholder="例如 hongwei">
-      <label for="docType">文档类型（决定 chunk_size / overlap）</label>
-      <select id="docType">
-        <option value="DEFAULT" selected>默认（智能） — 1000 / 100</option>
-        <option value="PLAIN_TEXT">纯文本/文章 — 384 / 48</option>
-        <option value="TECH_DOC">技术文档/代码 — 448 / 64</option>
-        <option value="LEGAL">法律/合同文件 — 320 / 64</option>
-        <option value="FAQ">FAQ/知识库 — 400 / 45</option>
-        <option value="LONG_FORM">长文本/论文 — 768 / 150</option>
-      </select>
       <label for="accessibleBy">可见范围（可选）</label>
       <input type="text" id="accessibleBy" placeholder="例如 ADMIN，留空表示公开">
-      <button type="submit" id="btn">上传并构建索引</button>
+      <button type="submit" id="btn">上传文件</button>
     </form>
     <div class="msg" id="msg"></div>
     <div id="progress" hidden>
@@ -77,12 +68,16 @@ $("uploadForm").addEventListener("submit", async e => {
     const body = new FormData();
     body.append("file", file);
     body.append("uploadUser", $("uploadUser").value.trim());
-    body.append("docType", $("docType").value);
     const accessibleBy = $("accessibleBy").value.trim();
     if (accessibleBy) body.append("accessibleBy", accessibleBy);
     const res = await fetch("/api/documents/upload", { method: "POST", body });
     const doc = await res.json();
     if (!res.ok) throw new Error(doc.error || ("HTTP " + res.status));
+    if (doc.status === "STORED") {
+      $("msg").textContent = "Excel 已导入 MySQL，docId=" + doc.docId + "（SQL 查询功能暂未接入）";
+      $("btn").disabled = false;
+      return;
+    }
     $("msg").textContent = "已上传，docId=" + doc.docId + "，索引构建中…";
     poll(doc.docId, file.name);
   } catch (err) {

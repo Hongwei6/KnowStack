@@ -146,7 +146,7 @@ public class FileTypeUtil {
         if (fileName == null || fileName.isEmpty()) {
             return false;
         }
-        return fileName.toLowerCase().endsWith(".xlsx") || fileName.toLowerCase().endsWith(".xls") || fileName.toLowerCase().endsWith(".csv");
+        return fileName.toLowerCase(java.util.Locale.ROOT).matches(".*\\.(xls|xlsx|xlsm|xlt|xltx|xltm)");
     }
 
     /**
