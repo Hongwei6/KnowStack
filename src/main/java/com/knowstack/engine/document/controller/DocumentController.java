@@ -1,13 +1,20 @@
 package com.knowstack.engine.document.controller;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.knowstack.engine.document.constant.DocumentStatus;
 import com.knowstack.engine.document.constant.FileType;
 import com.knowstack.engine.document.constant.KnowledgeBaseType;
+import com.knowstack.engine.document.constant.SplitPreset;
+import com.knowstack.engine.document.constant.SplitType;
+import com.knowstack.engine.document.entity.DocumentSplitParam;
 import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.entity.KnowledgeDocumentVersion;
+import com.knowstack.engine.document.entity.KnowledgeSegment;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
+import com.knowstack.engine.document.mapper.KnowledgeSegmentMapper;
 import com.knowstack.engine.document.service.DocumentIngestService;
+import com.knowstack.engine.document.service.DocumentSplitService;
 import com.knowstack.engine.document.service.MinioService;
 import com.knowstack.engine.document.util.FileTypeUtil;
 import lombok.RequiredArgsConstructor;
@@ -24,11 +31,13 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.file.Paths;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * 文档上传接口：上传 PDF 到 MinIO，落库后异步触发索引构建流水线
+ * 文档接口：上传（异步构建索引）、手动切分（幂等）、分段预览
  */
 @Slf4j
 @RestController
@@ -38,8 +47,10 @@ public class DocumentController {
 
     private final MinioService minioService;
     private final DocumentIngestService ingestService;
+    private final DocumentSplitService splitService;
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeDocumentVersionMapper versionMapper;
+    private final KnowledgeSegmentMapper segmentMapper;
 
     /**
      * 文件上传接口
@@ -53,7 +64,8 @@ public class DocumentController {
     public KnowledgeDocument upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam("uploadUser") String uploadUser,
-            @RequestParam(value = "accessibleBy", required = false) String accessibleBy) throws IOException {
+            @RequestParam(value = "accessibleBy", required = false) String accessibleBy,
+            @RequestParam(value = "docType", required = false) String docType) throws IOException {
         String fileName = sanitize(file.getOriginalFilename());
         if (FileTypeUtil.getFileType(fileName, file) != FileType.PDF) {
             throw new IllegalArgumentException("仅支持 PDF 文件: " + fileName);
@@ -70,6 +82,11 @@ public class DocumentController {
         document.setStatus(DocumentStatus.UPLOADED);
         document.setAccessibleBy(accessibleBy);
         document.setKnowledgeBaseType(KnowledgeBaseType.DOCUMENT_SEARCH);
+        // 按文档类型预设设置切分参数（chunkSize/overlap），未传则用默认预设
+        SplitPreset preset = docType != null && !docType.isBlank()
+                ? SplitPreset.valueOf(docType.trim().toUpperCase(Locale.ROOT))
+                : SplitPreset.DEFAULT;
+        document.setSplitParam(preset.toParam());
         documentMapper.insert(document);
 
         // 3. 版本记录（doc_url / converted_doc_url 保存在版本表）
@@ -84,10 +101,43 @@ public class DocumentController {
         document.setCurrentVersionId(version.getVersionId());
         documentMapper.updateById(document);
 
-        // 4. 异步构建索引：MinerU 解析 → 分块 → embedding → 向量库
+        // 4. 异步构建索引：MinerU 解析 → 切分 → embedding → 向量库
         ingestService.process(document.getDocId(), version.getVersionId(), fileName, document.getDocTitle(), pdf);
         log.info("文档上传成功 docId={}, title={}, uploadUser={}", document.getDocId(), fileName, uploadUser);
         return document;
+    }
+
+    /**
+     * 手动切分（幂等）：不传参数且已切分时直接返回现有子分段数量；
+     * 传 docType/chunkSize/overlap 则更新切分参数并强制重切——
+     * 已向量化的文档会先清理旧向量并自动重新嵌入
+     */
+    @PostMapping("/split/{documentId}")
+    public Integer split(@PathVariable Long documentId,
+                         @RequestParam(value = "docType", required = false) String docType,
+                         @RequestParam(value = "chunkSize", required = false) Integer chunkSize,
+                         @RequestParam(value = "overlap", required = false) Integer overlap) {
+        if (docType == null && chunkSize == null) {
+            return splitService.split(documentId);
+        }
+        SplitPreset preset = docType != null
+                ? SplitPreset.valueOf(docType.trim().toUpperCase(Locale.ROOT))
+                : SplitPreset.DEFAULT;
+        DocumentSplitParam param = new DocumentSplitParam(SplitType.SMART.name(),
+                chunkSize != null ? chunkSize : preset.getChunkSize(),
+                overlap != null ? overlap : preset.getOverlap(),
+                null, null, null);
+        return splitService.split(documentId, param);
+    }
+
+    /**
+     * 分段预览：按顺序返回文档的所有分段（父分段 skipEmbedding=1，子分段=0）
+     */
+    @GetMapping("/{documentId}/segments")
+    public List<KnowledgeSegment> segments(@PathVariable Long documentId) {
+        return segmentMapper.selectList(new LambdaQueryWrapper<KnowledgeSegment>()
+                .eq(KnowledgeSegment::getDocumentId, documentId)
+                .orderByAsc(KnowledgeSegment::getChunkOrder));
     }
 
     /**

@@ -1,22 +1,10 @@
 package com.knowstack.engine.document.service;
 
 import com.knowstack.engine.document.constant.DocumentStatus;
-import com.knowstack.engine.document.constant.SegmentStatus;
 import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.entity.KnowledgeDocumentVersion;
-import com.knowstack.engine.document.entity.KnowledgeSegment;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
-import com.knowstack.engine.document.mapper.KnowledgeSegmentMapper;
-import dev.langchain4j.data.document.Document;
-import dev.langchain4j.data.document.DocumentSplitter;
-import dev.langchain4j.data.document.Metadata;
-import dev.langchain4j.data.document.splitter.DocumentSplitters;
-import dev.langchain4j.data.embedding.Embedding;
-import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.model.output.Response;
-import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -25,13 +13,11 @@ import org.springframework.stereotype.Service;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -40,7 +26,7 @@ import java.util.zip.ZipInputStream;
 /**
  * 文档索引构建流水线（异步）：
  * MinerU 解析 PDF → 图片上传 MinIO + 视觉模型生成描述 → Markdown 上传 MinIO
- * → 分块入库 → embedding → 向量写入 ES
+ * → 父子分块入库（DocumentSplitService）→ embedding → 向量写入 ES
  *
  * 状态流转：UPLOADED → CONVERTING → CONVERTED → CHUNKED → VECTOR_STORED，
  * 失败时状态停留在当前阶段并记录日志
@@ -50,19 +36,15 @@ import java.util.zip.ZipInputStream;
 @RequiredArgsConstructor
 public class DocumentIngestService {
 
-    /** ponytail: 固定 800/100 字符递归分块；需要按标题/分隔符分块时再接入 DocumentSplitParam */
-    private static final int CHUNK_SIZE = 800;
-    private static final int CHUNK_OVERLAP = 100;
     private static final Pattern IMAGE_TAG = Pattern.compile("!\\[(.*?)]\\(([^)]+)\\)");
 
     private final MineruClient mineruClient;
     private final MinioService minioService;
     private final VisionService visionService;
-    private final EmbeddingModel embeddingModel;
-    private final EmbeddingStore<TextSegment> embeddingStore;
+    private final DocumentSplitService splitService;
+    private final SegmentEmbeddingService embeddingService;
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeDocumentVersionMapper versionMapper;
-    private final KnowledgeSegmentMapper segmentMapper;
 
     @Async
     public void process(Long docId, Long versionId, String fileName, String docTitle, byte[] pdf) {
@@ -74,7 +56,7 @@ public class DocumentIngestService {
     }
 
     private void doProcess(Long docId, Long versionId, String fileName, String docTitle, byte[] pdf) throws IOException {
-        String storageKey = UUID.randomUUID().toString().replace("-", "");
+        String storageKey = java.util.UUID.randomUUID().toString().replace("-", "");
         updateStatus(docId, versionId, DocumentStatus.CONVERTING, null);
 
         // 1. MinerU 解析为 ZIP（Markdown + 图片）
@@ -105,46 +87,12 @@ public class DocumentIngestService {
         String mdUrl = minioService.upload(storageKey + "/" + mdName, markdown.getBytes(StandardCharsets.UTF_8), "text/markdown");
         updateStatus(docId, versionId, DocumentStatus.CONVERTED, mdUrl);
 
-        // 4. 分块并保存 knowledge_segment
-        DocumentSplitter splitter = DocumentSplitters.recursive(CHUNK_SIZE, CHUNK_OVERLAP);
-        List<TextSegment> chunks = splitter.split(Document.from(markdown));
-        List<KnowledgeSegment> savedSegments = new ArrayList<>(chunks.size());
-        for (int i = 0; i < chunks.size(); i++) {
-            KnowledgeSegment segment = new KnowledgeSegment();
-            segment.setText(chunks.get(i).text());
-            segment.setChunkId(UUID.randomUUID().toString());
-            segment.setDocumentId(docId);
-            segment.setDocumentVersion(versionId);
-            segment.setChunkOrder(i);
-            segment.setStatus(SegmentStatus.STORED);
-            segment.setSkipEmbedding(0);
-            segmentMapper.insert(segment);
-            savedSegments.add(segment);
-        }
-        updateStatus(docId, versionId, DocumentStatus.CHUNKED, null);
-        log.info("文档 docId={} 分块完成，共 {} 块", docId, savedSegments.size());
+        // 4. 父子分块入库（含状态推进 CHUNKED）
+        splitService.split(docId);
 
-        // 5. 批量 embedding 并写入向量库，chunkId 作为向量 ID
-        List<String> ids = new ArrayList<>(savedSegments.size());
-        List<TextSegment> toEmbed = new ArrayList<>(savedSegments.size());
-        for (KnowledgeSegment segment : savedSegments) {
-            Metadata metadata = new Metadata();
-            metadata.put("chunkId", segment.getChunkId());
-            metadata.put("documentId", docId);
-            metadata.put("docTitle", docTitle);
-            metadata.put("chunkOrder", segment.getChunkOrder());
-            ids.add(segment.getChunkId());
-            toEmbed.add(TextSegment.from(segment.getText(), metadata));
-        }
-        Response<List<Embedding>> embeddingResponse = embeddingModel.embedAll(toEmbed);
-        embeddingStore.addAll(ids, embeddingResponse.content(), toEmbed);
-        for (KnowledgeSegment segment : savedSegments) {
-            segment.setEmbeddingId(segment.getChunkId());
-            segment.setStatus(SegmentStatus.VECTOR_STORED);
-            segmentMapper.updateById(segment);
-        }
-        updateStatus(docId, versionId, DocumentStatus.VECTOR_STORED, null);
-        log.info("文档 docId={} 向量入库完成", docId);
+        // 5. embedding 并写入向量库（仅 skip_embedding=0 子分段，chunkId 作为向量 ID）
+        embeddingService.embed(docId, versionId, docTitle);
+        log.info("文档 docId={} 索引构建完成", docId);
     }
 
     private void updateStatus(Long docId, Long versionId, DocumentStatus status, String convertedDocUrl) {

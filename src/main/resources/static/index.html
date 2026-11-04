@@ -12,7 +12,7 @@
   h1 { font-size: 22px; }
   .card { background:#fff; border:1px solid var(--border); border-radius:12px; padding:24px; }
   label { display:block; font-size:13px; color:var(--muted); margin:14px 0 6px; }
-  input { width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:8px; font-size:14px; }
+  input, select { width:100%; padding:9px 11px; border:1px solid var(--border); border-radius:8px; font-size:14px; background:#fff; }
   button { margin-top:20px; width:100%; padding:11px; background:var(--accent); color:#fff; border:0; border-radius:8px; font-size:15px; cursor:pointer; }
   button:disabled { opacity:.55; cursor:not-allowed; }
   .msg { margin-top:14px; font-size:13px; }
@@ -37,6 +37,15 @@
       <input type="file" id="file" accept=".pdf,application/pdf" required>
       <label for="uploadUser">上传用户</label>
       <input type="text" id="uploadUser" required placeholder="例如 hongwei">
+      <label for="docType">文档类型（决定 chunk_size / overlap）</label>
+      <select id="docType">
+        <option value="DEFAULT" selected>默认（智能） — 1000 / 100</option>
+        <option value="PLAIN_TEXT">纯文本/文章 — 384 / 48</option>
+        <option value="TECH_DOC">技术文档/代码 — 448 / 64</option>
+        <option value="LEGAL">法律/合同文件 — 320 / 64</option>
+        <option value="FAQ">FAQ/知识库 — 400 / 45</option>
+        <option value="LONG_FORM">长文本/论文 — 768 / 150</option>
+      </select>
       <label for="accessibleBy">可见范围（可选）</label>
       <input type="text" id="accessibleBy" placeholder="例如 ADMIN，留空表示公开">
       <button type="submit" id="btn">上传并构建索引</button>
@@ -68,6 +77,7 @@ $("uploadForm").addEventListener("submit", async e => {
     const body = new FormData();
     body.append("file", file);
     body.append("uploadUser", $("uploadUser").value.trim());
+    body.append("docType", $("docType").value);
     const accessibleBy = $("accessibleBy").value.trim();
     if (accessibleBy) body.append("accessibleBy", accessibleBy);
     const res = await fetch("/api/documents/upload", { method: "POST", body });

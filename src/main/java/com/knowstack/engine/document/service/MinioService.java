@@ -1,6 +1,7 @@
 package com.knowstack.engine.document.service;
 
 import io.minio.BucketExistsArgs;
+import io.minio.GetObjectArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
@@ -10,6 +11,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 
 /**
  * MinIO 对象存储服务：上传文件并返回可直接访问的 URL
@@ -48,6 +51,29 @@ public class MinioService {
         }
         log.info("MinIO 上传成功: {}/{}/{}", endpoint, bucket, objectName);
         return endpoint + "/" + bucket + "/" + objectName;
+    }
+
+    /**
+     * 下载对象内容为文本（UTF-8）
+     */
+    public String downloadText(String objectName) {
+        try (InputStream is = client.getObject(
+                GetObjectArgs.builder().bucket(bucket).object(objectName).build())) {
+            return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new RuntimeException("MinIO 下载失败: " + objectName, e);
+        }
+    }
+
+    /**
+     * 从本服务生成的 URL 中还原对象名
+     */
+    public String objectName(String url) {
+        String prefix = endpoint + "/" + bucket + "/";
+        if (url == null || !url.startsWith(prefix)) {
+            throw new IllegalArgumentException("无法解析文档URL: " + url);
+        }
+        return url.substring(prefix.length());
     }
 
     /**

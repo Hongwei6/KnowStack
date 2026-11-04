@@ -2,6 +2,10 @@ package com.knowstack.engine.document.constant;
 
 public enum SegmentStatus {
     /**
+     * 初始化（已切分保存，尚未向量化）
+     */
+    INIT,
+    /**
      * 关系型数据库存储完成
      */
     STORED,
