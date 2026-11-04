@@ -9,6 +9,7 @@ import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.entity.KnowledgeDocumentVersion;
 import com.knowstack.engine.document.entity.KnowledgeSegment;
 import com.knowstack.engine.document.entity.DocumentSplitParam;
+import com.knowstack.engine.document.event.DocumentEvents;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
 import com.knowstack.engine.document.mapper.KnowledgeSegmentMapper;
@@ -18,8 +19,9 @@ import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.segment.TextSegment;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.Assert;
 
 import java.util.LinkedHashMap;
@@ -38,14 +40,16 @@ public class DocumentSplitService {
 
     private final MinioService minioService;
     private final SegmentEmbeddingService embeddingService;
+    private final ApplicationEventPublisher events;
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeDocumentVersionMapper versionMapper;
     private final KnowledgeSegmentMapper segmentMapper;
+    private final DocumentProcessingLock processingLock;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * 按已保存参数切分；已切分/已向量化时幂等返回现有子分段数量
      */
-    @Transactional
     public int split(Long documentId) {
         return split(documentId, null);
     }
@@ -56,8 +60,15 @@ public class DocumentSplitService {
      *
      * @return 保存的分段总数
      */
-    @Transactional
     public int split(Long documentId, DocumentSplitParam override) {
+        int count = processingLock.execute(documentId,
+                () -> transactionTemplate.execute(status -> doSplit(documentId, override)));
+        log.info("发布文档 CHUNKED 事件 docId={}, segmentCount={}", documentId, count);
+        events.publishEvent(new DocumentEvents.Chunked(documentId));
+        return count;
+    }
+
+    private int doSplit(Long documentId, DocumentSplitParam override) {
         KnowledgeDocument document = documentMapper.selectById(documentId);
         Assert.notNull(document, "文档不存在");
 
@@ -136,10 +147,7 @@ public class DocumentSplitService {
         log.info("文档 docId={} 切分完成，共 {} 段，参数: chunkSize={}, overlap={}, type={}",
                 documentId, segments.size(), param.chunkSize(), param.overlap(), param.splitType());
 
-        // 6. 之前已向量化的文档，重切后自动重新嵌入
-        if (wasVectorized) {
-            embeddingService.embed(documentId, version.getVersionId(), document.getDocTitle());
-        }
+        // 向量化由提交后的 CHUNKED 事件驱动
         return segments.size();
     }
 }

@@ -53,6 +53,16 @@ public class MinioService {
         return endpoint + "/" + bucket + "/" + objectName;
     }
 
+    /** 下载原始 PDF 供异步转换使用；事件中不携带文件字节。 */
+    public byte[] downloadBytes(String objectName) {
+        try (InputStream is = client.getObject(
+                GetObjectArgs.builder().bucket(bucket).object(objectName).build())) {
+            return is.readAllBytes();
+        } catch (Exception e) {
+            throw new RuntimeException("MinIO 下载失败: " + objectName, e);
+        }
+    }
+
     /**
      * 下载对象内容为文本（UTF-8）
      */

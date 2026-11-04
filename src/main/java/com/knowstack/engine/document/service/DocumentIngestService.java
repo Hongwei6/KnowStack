@@ -3,11 +3,12 @@ package com.knowstack.engine.document.service;
 import com.knowstack.engine.document.constant.DocumentStatus;
 import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.entity.KnowledgeDocumentVersion;
+import com.knowstack.engine.document.event.DocumentEvents;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.scheduling.annotation.Async;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
@@ -24,12 +25,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * 文档索引构建流水线（异步）：
- * MinerU 解析 PDF → 图片上传 MinIO + 视觉模型生成描述 → Markdown 上传 MinIO
- * → 父子分块入库（DocumentSplitService）→ embedding → 向量写入 ES
- *
- * 状态流转：UPLOADED → CONVERTING → CONVERTED → CHUNKED → VECTOR_STORED，
- * 失败时状态停留在当前阶段并记录日志
+ * 上传事件触发 PDF 转换；成功后发布转换事件，切分与向量化由各自监听器处理。
  */
 @Slf4j
 @Service
@@ -41,22 +37,35 @@ public class DocumentIngestService {
     private final MineruClient mineruClient;
     private final MinioService minioService;
     private final VisionService visionService;
-    private final DocumentSplitService splitService;
-    private final SegmentEmbeddingService embeddingService;
+    private final ApplicationEventPublisher events;
+    private final DocumentProcessingLock processingLock;
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeDocumentVersionMapper versionMapper;
 
-    @Async
-    public void process(Long docId, Long versionId, String fileName, String docTitle, byte[] pdf) {
-        try {
-            doProcess(docId, versionId, fileName, docTitle, pdf);
-        } catch (Exception e) {
-            log.error("文档索引构建失败 docId={}, 当前状态={}", docId, documentMapper.selectById(docId).getStatus(), e);
+    /** 上传事件或恢复任务触发 PDF 转换；成功后发布 CONVERTED 事件。 */
+    public void convert(Long docId) {
+        boolean converted = processingLock.execute(docId, () -> doConvert(docId));
+        if (converted) {
+            log.info("发布文档 CONVERTED 事件 docId={}", docId);
+            events.publishEvent(new DocumentEvents.Converted(docId));
         }
     }
 
-    private void doProcess(Long docId, Long versionId, String fileName, String docTitle, byte[] pdf) throws IOException {
-        String storageKey = java.util.UUID.randomUUID().toString().replace("-", "");
+    private boolean doConvert(Long docId) throws IOException {
+        KnowledgeDocument document = documentMapper.selectById(docId);
+        if (document == null || (document.getStatus() != DocumentStatus.UPLOADED
+                && document.getStatus() != DocumentStatus.CONVERTING)) {
+            return false;
+        }
+        Long versionId = document.getCurrentVersionId();
+        KnowledgeDocumentVersion source = versionMapper.selectById(versionId);
+        if (source == null || source.getDocUrl() == null) {
+            throw new IllegalStateException("原始 PDF 不存在: " + docId);
+        }
+        log.info("开始 PDF 转换 docId={}, versionId={}", docId, versionId);
+        String fileName = document.getDocTitle();
+        byte[] pdf = minioService.downloadBytes(minioService.objectName(source.getDocUrl()));
+        String storageKey = docId + "/" + versionId;
         updateStatus(docId, versionId, DocumentStatus.CONVERTING, null);
 
         // 1. MinerU 解析为 ZIP（Markdown + 图片）
@@ -87,12 +96,8 @@ public class DocumentIngestService {
         String mdUrl = minioService.upload(storageKey + "/" + mdName, markdown.getBytes(StandardCharsets.UTF_8), "text/markdown");
         updateStatus(docId, versionId, DocumentStatus.CONVERTED, mdUrl);
 
-        // 4. 父子分块入库（含状态推进 CHUNKED）
-        splitService.split(docId);
-
-        // 5. embedding 并写入向量库（仅 skip_embedding=0 子分段，chunkId 作为向量 ID）
-        embeddingService.embed(docId, versionId, docTitle);
-        log.info("文档 docId={} 索引构建完成", docId);
+        log.info("文档 docId={} 转换完成", docId);
+        return true;
     }
 
     private void updateStatus(Long docId, Long versionId, DocumentStatus status, String convertedDocUrl) {

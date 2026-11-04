@@ -14,11 +14,15 @@ import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
 import com.knowstack.engine.document.mapper.KnowledgeSegmentMapper;
 import com.knowstack.engine.document.service.DocumentIngestService;
+import com.knowstack.engine.document.event.DocumentEvents;
+import com.knowstack.engine.document.service.DocumentProcessingLock;
 import com.knowstack.engine.document.service.DocumentSplitService;
 import com.knowstack.engine.document.service.MinioService;
 import com.knowstack.engine.document.util.FileTypeUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,6 +31,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
@@ -46,7 +51,7 @@ import java.util.UUID;
 public class DocumentController {
 
     private final MinioService minioService;
-    private final DocumentIngestService ingestService;
+    private final ApplicationEventPublisher events;
     private final DocumentSplitService splitService;
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeDocumentVersionMapper versionMapper;
@@ -61,6 +66,7 @@ public class DocumentController {
      * @return 保存后的文档记录（异步流水线随后推进状态）
      */
     @PostMapping("/upload")
+    @Transactional
     public KnowledgeDocument upload(
             @RequestParam("file") MultipartFile file,
             @RequestParam("uploadUser") String uploadUser,
@@ -101,8 +107,9 @@ public class DocumentController {
         document.setCurrentVersionId(version.getVersionId());
         documentMapper.updateById(document);
 
-        // 4. 异步构建索引：MinerU 解析 → 切分 → embedding → 向量库
-        ingestService.process(document.getDocId(), version.getVersionId(), fileName, document.getDocTitle(), pdf);
+        // 事务提交后触发上传事件；后续阶段由事件监听器接力
+        events.publishEvent(new DocumentEvents.Uploaded(document.getDocId()));
+        log.info("发布文档 UPLOADED 事件 docId={}, versionId={}", document.getDocId(), version.getVersionId());
         log.info("文档上传成功 docId={}, title={}, uploadUser={}", document.getDocId(), fileName, uploadUser);
         return document;
     }
@@ -110,7 +117,7 @@ public class DocumentController {
     /**
      * 手动切分（幂等）：不传参数且已切分时直接返回现有子分段数量；
      * 传 docType/chunkSize/overlap 则更新切分参数并强制重切——
-     * 已向量化的文档会先清理旧向量并自动重新嵌入
+     * 已向量化的文档会先清理旧向量，分段提交后再通过事件重新嵌入
      */
     @PostMapping("/split/{documentId}")
     public Integer split(@PathVariable Long documentId,
@@ -150,6 +157,11 @@ public class DocumentController {
             throw new IllegalArgumentException("文档不存在: " + docId);
         }
         return document;
+    }
+
+    @ExceptionHandler(DocumentProcessingLock.DocumentBusyException.class)
+    public ResponseEntity<Map<String, String>> documentBusy(DocumentProcessingLock.DocumentBusyException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
