@@ -93,13 +93,13 @@ public class ExcelProcessServiceImpl implements FileProcessService {
         }
         // 每个文档一张表，避免不同上传的同名文件覆盖其他文档的数据。
         String createSql = "CREATE TABLE `" + tableName + "` (`id` BIGINT NOT NULL AUTO_INCREMENT, "
-                + columns.stream().map(c -> "`" + c.columnName() + "` TEXT NULL")
+                + columns.stream().map(c -> quoteColumn(c.columnName()) + " TEXT NULL")
                         .collect(Collectors.joining(", "))
                 + ", PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
         jdbcTemplate.execute(createSql);
         try {
             String insertSql = "INSERT INTO `" + tableName + "` ("
-                    + columns.stream().map(c -> "`" + c.columnName() + "`").collect(Collectors.joining(", "))
+                    + columns.stream().map(c -> quoteColumn(c.columnName())).collect(Collectors.joining(", "))
                     + ") VALUES (" + columns.stream().map(c -> "?").collect(Collectors.joining(", ")) + ")";
             for (int start = 0; start < data.size(); start += BATCH_SIZE) {
                 List<List<String>> batch = data.subList(start, Math.min(start + BATCH_SIZE, data.size()));
@@ -147,23 +147,28 @@ public class ExcelProcessServiceImpl implements FileProcessService {
 
     private List<ColumnInfo> columns(List<String> headers) {
         Set<String> used = new HashSet<>();
+        used.add("id");
         List<ColumnInfo> columns = new ArrayList<>(headers.size());
         for (int i = 0; i < headers.size(); i++) {
             String header = headers.get(i);
-            String base = header == null ? "" : header.toLowerCase(java.util.Locale.ROOT)
-                    .replaceAll("[^a-z0-9]+", "_").replaceAll("^_+|_+$", "");
-            if (base.isEmpty()) {
-                base = String.valueOf(i + 1);
+            String base = header == null ? "" : header.trim().replaceAll("[\\p{Cntrl}]", "_");
+            if (base.isBlank()) {
+                base = "col_" + (i + 1);
             }
-            base = "col_" + base.substring(0, Math.min(base.length(), 48));
+            base = base.substring(0, Math.min(base.length(), 60)).stripTrailing();
             String name = base;
             int suffix = 2;
-            while (!used.add(name)) {
-                name = base + "_" + suffix++;
+            while (!used.add(name.toLowerCase(java.util.Locale.ROOT))) {
+                String ending = "_" + suffix++;
+                name = base.substring(0, Math.min(base.length(), 64 - ending.length())) + ending;
             }
             columns.add(new ColumnInfo(i, header, name, "TEXT"));
         }
         return columns;
+    }
+
+    private String quoteColumn(String name) {
+        return "`" + name.replace("`", "``") + "`";
     }
 
     @Override

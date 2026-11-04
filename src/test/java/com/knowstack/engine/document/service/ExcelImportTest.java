@@ -55,12 +55,12 @@ class ExcelImportTest {
         ArgumentCaptor<TableMeta> meta = ArgumentCaptor.forClass(TableMeta.class);
         verify(metaMapper).insert(meta.capture());
         assertThat(meta.getValue().getTableName()).isEqualTo("custom_data_query_42");
-        assertThat(meta.getValue().getColumnsInfo()).contains("col_name", "col_name_2", "col_3");
+        assertThat(meta.getValue().getColumnsInfo()).contains("\"columnName\":\"Name\"", "\"columnName\":\"Name_2\"", "\"columnName\":\"金额\"");
         verify(jdbc).execute(org.mockito.ArgumentMatchers.contains("CREATE TABLE `custom_data_query_42`"));
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<BatchPreparedStatementSetter> setter = ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
         verify(jdbc).batchUpdate(sql.capture(), setter.capture());
-        assertThat(sql.getValue()).contains("`col_name`, `col_name_2`, `col_3`").contains("VALUES (?, ?, ?)")
+        assertThat(sql.getValue()).contains("`Name`, `Name_2`, `金额`").contains("VALUES (?, ?, ?)")
                 .doesNotContain("O'Brien");
         PreparedStatement ps = mock(PreparedStatement.class);
         setter.getValue().setValues(ps, 0);
@@ -78,13 +78,13 @@ class ExcelImportTest {
         document.setDocId(52L);
         document.setCurrentVersionId(9L);
         document.setDocTitle("报价.csv");
-        byte[] csv = "\uFEFF名称,备注\r\n张三,\"第一行,\r\n第二行\"\"引用\"\"\"\r\n".getBytes(StandardCharsets.UTF_8);
+        byte[] csv = "\uFEFF名称,备注,id,名称,含`符\r\n张三,\"第一行,\r\n第二行\"\"引用\"\"\",42,重复,安全\r\n".getBytes(StandardCharsets.UTF_8);
         new ExcelProcessServiceImpl(mapper, jdbc).processDocument(document, new ByteArrayInputStream(csv));
         ArgumentCaptor<TableMeta> meta = ArgumentCaptor.forClass(TableMeta.class);
         verify(mapper).insert(meta.capture());
-        assertThat(meta.getValue().getColumnsInfo()).contains("名称", "备注");
+        assertThat(meta.getValue().getColumnsInfo()).contains("\"columnName\":\"名称\"", "\"columnName\":\"名称_2\"", "\"columnName\":\"id_2\"", "\"columnName\":\"含`符\"");
         ArgumentCaptor<BatchPreparedStatementSetter> batch = ArgumentCaptor.forClass(BatchPreparedStatementSetter.class);
-        verify(jdbc).batchUpdate(any(String.class), batch.capture());
+        verify(jdbc).batchUpdate(org.mockito.ArgumentMatchers.contains("`名称`, `备注`, `id_2`, `名称_2`, `含``符`"), batch.capture());
         PreparedStatement ps = mock(PreparedStatement.class);
         batch.getValue().setValues(ps, 0);
         verify(ps).setString(1, "张三");
