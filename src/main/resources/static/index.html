@@ -35,6 +35,18 @@
     <form id="uploadForm">
       <label for="file">PDF、Word、Markdown、TXT、Excel 或 CSV 文件（表格导入 MySQL）</label>
       <input type="file" id="file" accept=".pdf,.doc,.docx,.md,.txt,.csv,.xls,.xlsx,.xlsm,.xlt,.xltx,.xltm" required>
+      <label for="splitType">切分方式（可选）</label>
+      <select id="splitType">
+        <option value="">默认（智能：标题+父子分段；TXT 按长度）</option>
+        <option value="SMART">SMART · 标题+父子分段</option>
+        <option value="TITLE">TITLE · 按标题层级</option>
+        <option value="LENGTH">LENGTH · 按长度</option>
+        <option value="SEPARATOR">SEPARATOR · 按分隔符</option>
+        <option value="REGEX">REGEX · 按正则</option>
+      </select>
+      <input type="text" id="titleLevel" placeholder="标题层级 1-6（TITLE 可选，默认 3）" hidden>
+      <input type="text" id="separator" placeholder="分隔符（SEPARATOR 必填）" hidden>
+      <input type="text" id="regex" placeholder="正则表达式（REGEX 必填）" hidden>
       <label for="uploadUser">上传用户</label>
       <input type="text" id="uploadUser" required placeholder="例如 hongwei">
       <label for="accessibleBy">可见范围（可选）</label>
@@ -70,6 +82,13 @@ $("uploadForm").addEventListener("submit", async e => {
     body.append("uploadUser", $("uploadUser").value.trim());
     const accessibleBy = $("accessibleBy").value.trim();
     if (accessibleBy) body.append("accessibleBy", accessibleBy);
+    const splitType = $("splitType").value;
+    if (splitType) {
+      body.append("splitType", splitType);
+      if (splitType === "TITLE" && $("titleLevel").value.trim()) body.append("titleLevel", $("titleLevel").value.trim());
+      if (splitType === "SEPARATOR") body.append("separator", $("separator").value);
+      if (splitType === "REGEX") body.append("regex", $("regex").value);
+    }
     const res = await fetch("/api/documents/upload", { method: "POST", body });
     const doc = await res.json();
     if (!res.ok) throw new Error(doc.error || ("HTTP " + res.status));
@@ -118,6 +137,12 @@ function render(doc) {
   const created = doc.createdAt ? "，开始于 " + doc.createdAt.replace("T", " ").slice(0, 19) : "";
   $("meta").textContent = "文档：" + doc.docTitle + created;
 }
+
+$("splitType").addEventListener("change", e => {
+  $("titleLevel").hidden = e.target.value !== "TITLE";
+  $("separator").hidden = e.target.value !== "SEPARATOR";
+  $("regex").hidden = e.target.value !== "REGEX";
+});
 </script>
 </body>
 </html>

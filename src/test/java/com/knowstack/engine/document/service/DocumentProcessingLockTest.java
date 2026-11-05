@@ -89,9 +89,11 @@ class DocumentProcessingLockTest {
                 documentMapper, versionMapper, segmentMapper, processingLock, transactionTemplate);
         DocumentIngestService ingestService = new DocumentIngestService(mineruClient, minioService, visionService,
                 events, processingLock, documentMapper, versionMapper);
-        MockMvc mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minioService,
-                mock(com.knowstack.engine.document.service.impl.ExcelProcessServiceImpl.class), events,
-                splitService, documentMapper, versionMapper, segmentMapper)).build();
+        MockMvc mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
+                new DocumentUploadService(minioService,
+                        mock(com.knowstack.engine.document.service.impl.ExcelProcessServiceImpl.class),
+                        events, documentMapper, versionMapper),
+                splitService, documentMapper, segmentMapper)).build();
 
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);

@@ -5,9 +5,11 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.knowstack.engine.document.constant.DocumentStatus;
 import com.knowstack.engine.document.constant.SegmentStatus;
 import com.knowstack.engine.document.constant.SplitPreset;
+import com.knowstack.engine.document.constant.SplitType;
 import com.knowstack.engine.document.entity.KnowledgeDocument;
 import com.knowstack.engine.document.entity.KnowledgeDocumentVersion;
 import com.knowstack.engine.document.entity.KnowledgeSegment;
+import com.knowstack.engine.document.entity.SplitOptions;
 import com.knowstack.engine.document.entity.DocumentSplitParam;
 import com.knowstack.engine.document.event.DocumentEvents;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
@@ -52,12 +54,36 @@ public class DocumentSplitService {
      * 按已保存参数切分；已切分/已向量化时幂等返回现有子分段数量
      */
     public int split(Long documentId) {
-        return split(documentId, null);
+        return split(documentId, (DocumentSplitParam) null);
     }
 
     /**
+     * 手动切分入口：由前端切分选项构建切分参数后委托切分。
+     * 任一参数传入即强制重切，全部为空时幂等返回现有子分段数量。
+     */
+    public Integer split(Long documentId, SplitOptions options) {
+        if (options == null || (options.docType() == null && options.chunkSize() == null
+                && options.splitType() == null)) {
+            return split(documentId);
+        }
+        SplitPreset preset = options.docType() != null && !options.docType().isBlank()
+                ? SplitPreset.valueOf(options.docType().trim().toUpperCase(java.util.Locale.ROOT))
+                : SplitPreset.DEFAULT;
+        return split(documentId, new DocumentSplitParam(
+                resolveSplitType(options.splitType(), false).name(),
+                options.chunkSize() != null ? options.chunkSize() : preset.getChunkSize(),
+                options.overlap() != null ? options.overlap() : preset.getOverlap(),
+                options.titleLevel(), options.separator(), options.regex()));
+    }
+
+    /** 解析前端传入的切分方式；未传时按 txtDefaultLength 决定默认值。 */
+    static SplitType resolveSplitType(String splitType, boolean txtDefaultLength) {
+        return splitType == null || splitType.isBlank()
+                ? (txtDefaultLength ? SplitType.LENGTH : SplitType.SMART)
+                : SplitType.valueOf(splitType.trim().toUpperCase(java.util.Locale.ROOT));
+    }
+    /**
      * 切分文档；传入 override 时更新文档切分参数并强制重切——
-     * 旧分段已向量化的先清理向量库，重切后自动重新嵌入
      *
      * @return 保存的分段总数
      */

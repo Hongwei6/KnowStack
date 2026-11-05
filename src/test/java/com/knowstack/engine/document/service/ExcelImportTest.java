@@ -126,8 +126,9 @@ class ExcelImportTest {
             version.setVersionId(7L);
             return 1;
         });
-        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minio, processor, events,
-                mock(DocumentSplitService.class), documents, versions, mock(KnowledgeSegmentMapper.class))).build();
+        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
+                new DocumentUploadService(minio, processor, events, documents, versions),
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
         mvc.perform(multipart("/api/documents/upload")
                         .file(new MockMultipartFile("file", "报价.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12", workbook()))
                         .param("uploadUser", "alice"))
@@ -163,8 +164,9 @@ class ExcelImportTest {
             return 1;
         });
         when(minio.upload(any(), any(), any())).thenReturn("source-url");
-        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minio, processor, events,
-                mock(DocumentSplitService.class), documents, versions, mock(KnowledgeSegmentMapper.class))).build();
+        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
+                new DocumentUploadService(minio, processor, events, documents, versions),
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
         for (String extension : List.of("doc", "docx")) {
             mvc.perform(multipart("/api/documents/upload")
                             .file(new MockMultipartFile("file", "report." + extension, "application/octet-stream",
@@ -240,9 +242,9 @@ class ExcelImportTest {
             });
             String imageUrl = "http://127.0.0.1:" + port + "/img/shot.png";
             String markdown = "# 标题\n\n![截图](" + imageUrl + ") 与失效链接 ![坏](http://127.0.0.1:1/dead.png)\n";
-            var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minio,
-                    mock(ExcelProcessServiceImpl.class), events, mock(DocumentSplitService.class),
-                    documents, versions, mock(KnowledgeSegmentMapper.class))).build();
+            var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
+                    new DocumentUploadService(minio, mock(ExcelProcessServiceImpl.class), events, documents, versions),
+                    mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
             mvc.perform(multipart("/api/documents/upload")
                             .file(new MockMultipartFile("file", "notes.md", "text/markdown",
                                     markdown.getBytes(StandardCharsets.UTF_8)))
@@ -296,9 +298,9 @@ class ExcelImportTest {
             invocation.<KnowledgeDocumentVersion>getArgument(0).setVersionId(5L);
             return 1;
         });
-        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minio,
-                mock(ExcelProcessServiceImpl.class), events, mock(DocumentSplitService.class),
-                documents, versions, mock(KnowledgeSegmentMapper.class))).build();
+        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
+                new DocumentUploadService(minio, mock(ExcelProcessServiceImpl.class), events, documents, versions),
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
         byte[] text = "纯文本内容，无标题结构。".getBytes(StandardCharsets.UTF_8);
         mvc.perform(multipart("/api/documents/upload")
                         .file(new MockMultipartFile("file", "notes.txt", "text/plain", text))
@@ -331,5 +333,41 @@ class ExcelImportTest {
         verify(minio).upload(eq("11/5/notes.md"), saved.capture(), eq("text/markdown"));
         assertThat(new String(saved.getValue(), StandardCharsets.UTF_8)).isEqualTo("纯文本内容，无标题结构。");
         verify(events).publishEvent(new DocumentEvents.Converted(11L));
+    }
+
+    @Test
+    void splitTypeIsSelectableFromFrontendAndValidated() throws Exception {
+        MinioService minio = mock(MinioService.class);
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        KnowledgeDocumentMapper documents = mock(KnowledgeDocumentMapper.class);
+        KnowledgeDocumentVersionMapper versions = mock(KnowledgeDocumentVersionMapper.class);
+        when(documents.insert(any(KnowledgeDocument.class))).thenAnswer(invocation -> {
+            invocation.<KnowledgeDocument>getArgument(0).setDocId(12L);
+            return 1;
+        });
+        when(versions.insert(any(KnowledgeDocumentVersion.class))).thenAnswer(invocation -> {
+            invocation.<KnowledgeDocumentVersion>getArgument(0).setVersionId(6L);
+            return 1;
+        });
+        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
+                new DocumentUploadService(minio, mock(ExcelProcessServiceImpl.class), events, documents, versions),
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
+        mvc.perform(multipart("/api/documents/upload")
+                        .file(new MockMultipartFile("file", "doc.md", "text/markdown", "# h\nbody".getBytes()))
+                        .param("uploadUser", "alice")
+                        .param("splitType", "TITLE")
+                        .param("titleLevel", "2"))
+                .andExpect(status().isOk());
+        ArgumentCaptor<KnowledgeDocument> doc = ArgumentCaptor.forClass(KnowledgeDocument.class);
+        verify(documents).insert(doc.capture());
+        assertThat(doc.getValue().getSplitParam().splitType()).isEqualTo("TITLE");
+        assertThat(doc.getValue().getSplitParam().titleLevel()).isEqualTo(2);
+        assertThat(doc.getValue().getSplitParam().chunkSize()).isEqualTo(1000);
+
+        mvc.perform(multipart("/api/documents/upload")
+                        .file(new MockMultipartFile("file", "doc.md", "text/markdown", "# h".getBytes()))
+                        .param("uploadUser", "alice")
+                        .param("splitType", "NOT_A_TYPE"))
+                .andExpect(status().isBadRequest());
     }
 }
