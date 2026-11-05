@@ -32,7 +32,7 @@ public class FileTypeUtil {
             return FileType.DOC;
         }
 
-        if (isMarkdownFile(fileName) || isMarkdownFile(file)) {
+        if (isMarkdownFile(fileName)) {
             return FileType.MARKDOWN;
         }
 
@@ -128,16 +128,6 @@ public class FileTypeUtil {
         }
     }
 
-    private static boolean isMarkdownFile(MultipartFile file) {
-        try (InputStream is = file.getInputStream()) {
-            String mimeType = tika.detect(is);
-            return mimeType.equals("text/plain") ||
-                    mimeType.equals("application/markdown");
-        } catch (IOException e) {
-            log.error("文件类型检测失败: {}", e.getMessage());
-            return false;
-        }
-    }
 
     /**
      * 通过后缀名判断是否为 Excel 文件

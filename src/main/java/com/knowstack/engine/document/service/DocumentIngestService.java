@@ -75,10 +75,11 @@ public class DocumentIngestService {
         String storageKey = docId + "/" + versionId;
         updateStatus(docId, versionId, DocumentStatus.CONVERTING, null);
 
-        // 1. 取 Markdown 与图片：.md 直接读原文并下载文中 URL 引用的图片；PDF/Word 走 MinerU 解析 ZIP
+        // 1. 取 Markdown 与图片：.md/.txt 直接读原文并下载文中 URL 引用的图片；PDF/Word 走 MinerU 解析 ZIP
         String markdown;
         Map<String, byte[]> imageEntries = new LinkedHashMap<>();
-        if (fileName.toLowerCase(Locale.ROOT).endsWith(".md")) {
+        String lowerName = fileName.toLowerCase(Locale.ROOT);
+        if (lowerName.endsWith(".md") || lowerName.endsWith(".txt")) {
             markdown = new String(content, StandardCharsets.UTF_8);
             fetchRemoteImages(markdown, imageEntries);
         } else {
@@ -108,7 +109,7 @@ public class DocumentIngestService {
         log.info("文档 docId={} 图片处理完成，共 {} 张", docId, imageUrls.size());
 
         // 3. Markdown 上传 MinIO，状态推进 CONVERTED
-        String mdName = fileName.replaceAll("(?i)\\.(pdf|docx?|md)$", "") + ".md";
+        String mdName = fileName.replaceAll("(?i)\\.(pdf|docx?|md|txt)$", "") + ".md";
         String mdUrl = minioService.upload(storageKey + "/" + mdName, markdown.getBytes(StandardCharsets.UTF_8), "text/markdown");
         updateStatus(docId, versionId, DocumentStatus.CONVERTED, mdUrl);
 

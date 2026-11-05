@@ -80,8 +80,9 @@ public class DocumentController {
                 && fileName.toLowerCase(Locale.ROOT).matches(".*\\.(xls|xlsx|xlsm|xlt|xltx|xltm)"))) {
             return uploadExcel(file, uploadUser, accessibleBy, fileName);
         }
-        if (fileType != FileType.PDF && fileType != FileType.DOC && fileType != FileType.MARKDOWN) {
-            throw new IllegalArgumentException("仅支持 PDF、Word、Markdown、CSV 或 Excel 表格文件: " + fileName);
+        if (fileType != FileType.PDF && fileType != FileType.DOC && fileType != FileType.MARKDOWN
+                && fileType != FileType.TXT) {
+            throw new IllegalArgumentException("仅支持 PDF、Word、Markdown、TXT、CSV 或 Excel 表格文件: " + fileName);
         }
         String lowerName = fileName.toLowerCase(Locale.ROOT);
         if (fileType == FileType.DOC && !lowerName.matches(".*\\.(doc|docx)")) {
@@ -90,12 +91,16 @@ public class DocumentController {
         if (fileType == FileType.MARKDOWN && !lowerName.endsWith(".md")) {
             throw new IllegalArgumentException("Markdown 文件须为 .md: " + fileName);
         }
+        if (fileType == FileType.TXT && !lowerName.endsWith(".txt")) {
+            throw new IllegalArgumentException("文本文件须为 .txt: " + fileName);
+        }
         byte[] content = file.getBytes();
 
         // 1. 原始文件上传 MinIO
         String storageKey = UUID.randomUUID().toString().replace("-", "");
         String contentType = fileType == FileType.PDF ? "application/pdf"
                 : fileType == FileType.MARKDOWN ? "text/markdown"
+                : fileType == FileType.TXT ? "text/plain"
                 : lowerName.endsWith(".docx")
                 ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/msword";
         String sourceUrl = minioService.upload(storageKey + "/source/" + fileName, content, contentType);
@@ -106,11 +111,12 @@ public class DocumentController {
         document.setStatus(DocumentStatus.UPLOADED);
         document.setAccessibleBy(accessibleBy);
         document.setKnowledgeBaseType(KnowledgeBaseType.DOCUMENT_SEARCH);
-        // 按文档类型预设设置切分参数（chunkSize/overlap），未传则用默认预设
+        // 按文档类型预设设置切分参数（chunkSize/overlap），未传则用默认预设；TXT 无标题结构按长度切分
         SplitPreset preset = docType != null && !docType.isBlank()
                 ? SplitPreset.valueOf(docType.trim().toUpperCase(Locale.ROOT))
-                : SplitPreset.DEFAULT;
-        document.setSplitParam(preset.toParam());
+                : fileType == FileType.TXT ? SplitPreset.PLAIN_TEXT : SplitPreset.DEFAULT;
+        document.setSplitParam(preset.toParam(fileType == FileType.TXT
+                && (docType == null || docType.isBlank()) ? SplitType.LENGTH : SplitType.SMART));
         documentMapper.insert(document);
 
         // 3. 版本记录（doc_url / converted_doc_url 保存在版本表）

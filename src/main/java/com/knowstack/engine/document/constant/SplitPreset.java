@@ -43,6 +43,11 @@ public enum SplitPreset {
     }
 
     public DocumentSplitParam toParam() {
-        return new DocumentSplitParam(SplitType.SMART.name(), chunkSize, overlap, null, null, null);
+        return toParam(SplitType.SMART);
+    }
+
+    /** TXT 等纯文本无标题结构，用 LENGTH 按长度切分。 */
+    public DocumentSplitParam toParam(SplitType type) {
+        return new DocumentSplitParam(type.name(), chunkSize, overlap, null, null, null);
     }
 }

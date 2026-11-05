@@ -280,4 +280,56 @@ class ExcelImportTest {
             server.stop(0);
         }
     }
+
+    @Test
+    void txtUploadEntersPipelineWithLengthSplitting() throws Exception {
+        MinioService minio = mock(MinioService.class);
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        KnowledgeDocumentMapper documents = mock(KnowledgeDocumentMapper.class);
+        KnowledgeDocumentVersionMapper versions = mock(KnowledgeDocumentVersionMapper.class);
+        DocumentProcessingLock lock = mock(DocumentProcessingLock.class);
+        when(documents.insert(any(KnowledgeDocument.class))).thenAnswer(invocation -> {
+            invocation.<KnowledgeDocument>getArgument(0).setDocId(11L);
+            return 1;
+        });
+        when(versions.insert(any(KnowledgeDocumentVersion.class))).thenAnswer(invocation -> {
+            invocation.<KnowledgeDocumentVersion>getArgument(0).setVersionId(5L);
+            return 1;
+        });
+        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minio,
+                mock(ExcelProcessServiceImpl.class), events, mock(DocumentSplitService.class),
+                documents, versions, mock(KnowledgeSegmentMapper.class))).build();
+        byte[] text = "纯文本内容，无标题结构。".getBytes(StandardCharsets.UTF_8);
+        mvc.perform(multipart("/api/documents/upload")
+                        .file(new MockMultipartFile("file", "notes.txt", "text/plain", text))
+                        .param("uploadUser", "alice"))
+                .andExpect(status().isOk());
+        verify(minio).upload(org.mockito.ArgumentMatchers.endsWith("/source/notes.txt"), eq(text), eq("text/plain"));
+        verify(events, times(1)).publishEvent(any(DocumentEvents.Uploaded.class));
+        ArgumentCaptor<KnowledgeDocument> doc = ArgumentCaptor.forClass(KnowledgeDocument.class);
+        verify(documents).insert(doc.capture());
+        assertThat(doc.getValue().getSplitParam().splitType()).isEqualTo("LENGTH");
+        assertThat(doc.getValue().getSplitParam().chunkSize()).isEqualTo(384);
+
+        KnowledgeDocument document = doc.getValue();
+        document.setDocId(11L);
+        document.setStatus(DocumentStatus.UPLOADED);
+        KnowledgeDocumentVersion version = new KnowledgeDocumentVersion();
+        version.setVersionId(5L);
+        version.setDocUrl("http://minio/knowstack/k/source/notes.txt");
+        when(documents.selectById(11L)).thenReturn(document);
+        when(versions.selectById(5L)).thenReturn(version);
+        when(minio.objectName("http://minio/knowstack/k/source/notes.txt")).thenReturn("k/source/notes.txt");
+        when(minio.downloadBytes("k/source/notes.txt")).thenReturn(text);
+        when(minio.upload(eq("11/5/notes.md"), any(byte[].class), eq("text/markdown"))).thenReturn("converted-url");
+        when(lock.execute(eq(11L), any())).thenAnswer(invocation -> invocation.<Callable<Boolean>>getArgument(1).call());
+        MineruClient mineru = mock(MineruClient.class);
+        new DocumentIngestService(mineru, minio, mock(VisionService.class), events, lock, documents, versions)
+                .convert(11L);
+        verifyNoInteractions(mineru);
+        ArgumentCaptor<byte[]> saved = ArgumentCaptor.forClass(byte[].class);
+        verify(minio).upload(eq("11/5/notes.md"), saved.capture(), eq("text/markdown"));
+        assertThat(new String(saved.getValue(), StandardCharsets.UTF_8)).isEqualTo("纯文本内容，无标题结构。");
+        verify(events).publishEvent(new DocumentEvents.Converted(11L));
+    }
 }
