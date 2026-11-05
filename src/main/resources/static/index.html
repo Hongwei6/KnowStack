@@ -33,8 +33,8 @@
   <h1>📚 知识库文档上传</h1>
   <div class="card">
     <form id="uploadForm">
-      <label for="file">PDF、Excel 或 CSV 文件（表格导入 MySQL）</label>
-      <input type="file" id="file" accept=".pdf,.csv,.xls,.xlsx,.xlsm,.xlt,.xltx,.xltm" required>
+      <label for="file">PDF、Word、Excel 或 CSV 文件（表格导入 MySQL）</label>
+      <input type="file" id="file" accept=".pdf,.doc,.docx,.csv,.xls,.xlsx,.xlsm,.xlt,.xltx,.xltm" required>
       <label for="uploadUser">上传用户</label>
       <input type="text" id="uploadUser" required placeholder="例如 hongwei">
       <label for="accessibleBy">可见范围（可选）</label>
@@ -74,7 +74,7 @@ $("uploadForm").addEventListener("submit", async e => {
     const doc = await res.json();
     if (!res.ok) throw new Error(doc.error || ("HTTP " + res.status));
     if (doc.status === "STORED") {
-      $("msg").textContent = "Excel 已导入 MySQL，docId=" + doc.docId + "（SQL 查询功能暂未接入）";
+      $("msg").textContent = "表格已导入 MySQL，docId=" + doc.docId + "（SQL 查询功能暂未接入）";
       $("btn").disabled = false;
       return;
     }

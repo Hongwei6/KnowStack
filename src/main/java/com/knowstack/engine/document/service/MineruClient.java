@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 
-/** MinerU 4.x 自托管 API：创建任务、上传 PDF、等待解析并下载结果 ZIP。 */
+/** MinerU 4.x 自托管 API：创建任务、上传 PDF/Word、等待解析并下载结果 ZIP。 */
 @Service
 public class MineruClient {
 
@@ -27,13 +27,13 @@ public class MineruClient {
         this.mapper = mapper;
     }
 
-    public byte[] parseToZip(String fileName, byte[] pdf) {
-        if (fileName == null || !fileName.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf")) {
-            throw new IllegalArgumentException("MinerU conversion requires a PDF file");
+    public byte[] parseToZip(String fileName, byte[] content) {
+        if (fileName == null || !fileName.toLowerCase(java.util.Locale.ROOT).matches(".*\\.(pdf|doc|docx)")) {
+            throw new IllegalArgumentException("MinerU conversion requires a PDF or Word file");
         }
         try {
             byte[] body = mapper.writeValueAsBytes(Map.of("tier", "standard", "files",
-                    java.util.List.of(Map.of("file_name", fileName, "bytes", pdf.length))));
+                    java.util.List.of(Map.of("file_name", fileName, "bytes", content.length))));
             JsonNode created = json(HttpRequest.newBuilder(uri("/v1/tasks"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), 202);
@@ -43,7 +43,7 @@ public class MineruClient {
                 throw new IOException("MinerU 未返回任务 ID 或上传地址: " + created);
             }
             HttpRequest.Builder uploadRequest = HttpRequest.newBuilder(uri(upload.path("url").asText()))
-                    .timeout(Duration.ofMinutes(2)).PUT(HttpRequest.BodyPublishers.ofByteArray(pdf));
+                    .timeout(Duration.ofMinutes(2)).PUT(HttpRequest.BodyPublishers.ofByteArray(content));
             upload.path("headers").fields().forEachRemaining(header -> uploadRequest.header(header.getKey(), header.getValue().asText()));
             response(uploadRequest.build(), 200);
 

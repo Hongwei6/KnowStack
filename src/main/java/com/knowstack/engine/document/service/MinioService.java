@@ -53,7 +53,7 @@ public class MinioService {
         return endpoint + "/" + bucket + "/" + objectName;
     }
 
-    /** 下载原始 PDF 供异步转换使用；事件中不携带文件字节。 */
+    /** 下载原始文档供异步转换使用；事件中不携带文件字节。 */
     public byte[] downloadBytes(String objectName) {
         try (InputStream is = client.getObject(
                 GetObjectArgs.builder().bucket(bucket).object(objectName).build())) {

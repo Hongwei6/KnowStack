@@ -62,7 +62,7 @@ public class DocumentController {
     /**
      * 文件上传接口
      *
-     * @param file         上传的 PDF 文件
+     * @param file         上传的 PDF、Word 或表格文件
      * @param uploadUser   上传用户
      * @param accessibleBy 可见范围（可选）
      * @return 保存后的文档记录（异步流水线随后推进状态）
@@ -80,14 +80,21 @@ public class DocumentController {
                 && fileName.toLowerCase(Locale.ROOT).matches(".*\\.(xls|xlsx|xlsm|xlt|xltx|xltm)"))) {
             return uploadExcel(file, uploadUser, accessibleBy, fileName);
         }
-        if (fileType != FileType.PDF) {
-            throw new IllegalArgumentException("仅支持 PDF、CSV 或 Excel 表格文件: " + fileName);
+        if (fileType != FileType.PDF && fileType != FileType.DOC) {
+            throw new IllegalArgumentException("仅支持 PDF、Word、CSV 或 Excel 表格文件: " + fileName);
         }
-        byte[] pdf = file.getBytes();
+        String lowerName = fileName.toLowerCase(Locale.ROOT);
+        if (fileType == FileType.DOC && !lowerName.matches(".*\\.(doc|docx)")) {
+            throw new IllegalArgumentException("Word 文件须为 .doc 或 .docx: " + fileName);
+        }
+        byte[] content = file.getBytes();
 
-        // 1. 原始 PDF 上传 MinIO
+        // 1. 原始文件上传 MinIO
         String storageKey = UUID.randomUUID().toString().replace("-", "");
-        String pdfUrl = minioService.upload(storageKey + "/source/" + fileName, pdf, "application/pdf");
+        String contentType = fileType == FileType.PDF ? "application/pdf"
+                : lowerName.endsWith(".docx")
+                ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/msword";
+        String sourceUrl = minioService.upload(storageKey + "/source/" + fileName, content, contentType);
 
         // 2. 文档记录
         KnowledgeDocument document = new KnowledgeDocument();
@@ -106,7 +113,7 @@ public class DocumentController {
         KnowledgeDocumentVersion version = new KnowledgeDocumentVersion();
         version.setDocId(document.getDocId());
         version.setVersion("1.0.0");
-        version.setDocUrl(pdfUrl);
+        version.setDocUrl(sourceUrl);
         version.setUploadUser(uploadUser);
         version.setStatus(DocumentStatus.UPLOADED);
         versionMapper.insert(version);
@@ -121,7 +128,7 @@ public class DocumentController {
         return document;
     }
 
-    /** Excel 同步导入 MySQL，不发布 PDF 流水线事件。 */
+    /** Excel/CSV 同步导入 MySQL，不发布文档解析流水线事件。 */
     private KnowledgeDocument uploadExcel(MultipartFile file, String uploadUser,
                                           String accessibleBy, String fileName) throws IOException {
         // 文件类型和后缀已由统一上传入口校验

@@ -25,7 +25,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
- * 上传事件触发 PDF 转换；成功后发布转换事件，切分与向量化由各自监听器处理。
+ * 上传事件触发 PDF/Word 转换；成功后发布转换事件，切分与向量化由各自监听器处理。
  */
 @Slf4j
 @Service
@@ -42,7 +42,7 @@ public class DocumentIngestService {
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeDocumentVersionMapper versionMapper;
 
-    /** 上传事件或恢复任务触发 PDF 转换；成功后发布 CONVERTED 事件。 */
+    /** 上传事件或恢复任务触发文档转换；成功后发布 CONVERTED 事件。 */
     public void convert(Long docId) {
         boolean converted = processingLock.execute(docId, () -> doConvert(docId));
         if (converted) {
@@ -60,16 +60,16 @@ public class DocumentIngestService {
         Long versionId = document.getCurrentVersionId();
         KnowledgeDocumentVersion source = versionMapper.selectById(versionId);
         if (source == null || source.getDocUrl() == null) {
-            throw new IllegalStateException("原始 PDF 不存在: " + docId);
+            throw new IllegalStateException("原始文档不存在: " + docId);
         }
-        log.info("开始 PDF 转换 docId={}, versionId={}", docId, versionId);
+        log.info("开始文档转换 docId={}, versionId={}", docId, versionId);
         String fileName = document.getDocTitle();
-        byte[] pdf = minioService.downloadBytes(minioService.objectName(source.getDocUrl()));
+        byte[] content = minioService.downloadBytes(minioService.objectName(source.getDocUrl()));
         String storageKey = docId + "/" + versionId;
         updateStatus(docId, versionId, DocumentStatus.CONVERTING, null);
 
         // 1. MinerU 解析为 ZIP（Markdown + 图片）
-        Map<String, byte[]> entries = unzip(mineruClient.parseToZip(fileName, pdf));
+        Map<String, byte[]> entries = unzip(mineruClient.parseToZip(fileName, content));
         String markdown = extractMarkdown(entries);
         if (markdown == null || markdown.isBlank()) {
             throw new IOException("MinerU 解析结果中没有 Markdown 内容");
@@ -92,7 +92,7 @@ public class DocumentIngestService {
         log.info("文档 docId={} 图片处理完成，共 {} 张", docId, imageUrls.size());
 
         // 3. Markdown 上传 MinIO，状态推进 CONVERTED
-        String mdName = fileName.replaceAll("(?i)\\.pdf$", "") + ".md";
+        String mdName = fileName.replaceAll("(?i)\\.(pdf|docx?)$", "") + ".md";
         String mdUrl = minioService.upload(storageKey + "/" + mdName, markdown.getBytes(StandardCharsets.UTF_8), "text/markdown");
         updateStatus(docId, versionId, DocumentStatus.CONVERTED, mdUrl);
 

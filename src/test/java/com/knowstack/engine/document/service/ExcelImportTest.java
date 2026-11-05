@@ -12,6 +12,7 @@ import com.knowstack.engine.document.mapper.KnowledgeDocumentVersionMapper;
 import com.knowstack.engine.document.mapper.KnowledgeSegmentMapper;
 import com.knowstack.engine.document.mapper.TableMetaMapper;
 import com.knowstack.engine.document.service.impl.ExcelProcessServiceImpl;
+import com.knowstack.engine.document.event.DocumentEvents;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -24,6 +25,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.sql.PreparedStatement;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Callable;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -139,5 +143,71 @@ class ExcelImportTest {
         assertThat(doc.getValue().getKnowledgeBaseType()).isEqualTo(KnowledgeBaseType.DATA_QUERY);
         verify(processor, times(2)).processDocument(any(KnowledgeDocument.class), any());
         verifyNoInteractions(events);
+    }
+
+    @Test
+    void wordUploadsEnterDocumentPipelineAndConvertToMarkdown() throws Exception {
+        MinioService minio = mock(MinioService.class);
+        ExcelProcessServiceImpl processor = mock(ExcelProcessServiceImpl.class);
+        ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+        KnowledgeDocumentMapper documents = mock(KnowledgeDocumentMapper.class);
+        KnowledgeDocumentVersionMapper versions = mock(KnowledgeDocumentVersionMapper.class);
+        MineruClient mineru = mock(MineruClient.class);
+        DocumentProcessingLock lock = mock(DocumentProcessingLock.class);
+        when(documents.insert(any(KnowledgeDocument.class))).thenAnswer(invocation -> {
+            invocation.<KnowledgeDocument>getArgument(0).setDocId(42L);
+            return 1;
+        });
+        when(versions.insert(any(KnowledgeDocumentVersion.class))).thenAnswer(invocation -> {
+            invocation.<KnowledgeDocumentVersion>getArgument(0).setVersionId(7L);
+            return 1;
+        });
+        when(minio.upload(any(), any(), any())).thenReturn("source-url");
+        var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minio, processor, events,
+                mock(DocumentSplitService.class), documents, versions, mock(KnowledgeSegmentMapper.class))).build();
+        for (String extension : List.of("doc", "docx")) {
+            mvc.perform(multipart("/api/documents/upload")
+                            .file(new MockMultipartFile("file", "report." + extension, "application/octet-stream",
+                                    new byte[]{1, 2, 3}))
+                            .param("uploadUser", "alice"))
+                    .andExpect(status().isOk());
+        }
+        verify(events, times(2)).publishEvent(any(DocumentEvents.Uploaded.class));
+        verifyNoInteractions(processor);
+        ArgumentCaptor<KnowledgeDocumentVersion> saved = ArgumentCaptor.forClass(KnowledgeDocumentVersion.class);
+        verify(versions, times(2)).insert(saved.capture());
+        assertThat(saved.getAllValues()).allSatisfy(version ->
+                assertThat(version.getStatus()).isEqualTo(DocumentStatus.UPLOADED));
+        verify(minio).upload(org.mockito.ArgumentMatchers.endsWith("report.doc"), any(), eq("application/msword"));
+        verify(minio).upload(org.mockito.ArgumentMatchers.endsWith("report.docx"), any(),
+                eq("application/vnd.openxmlformats-officedocument.wordprocessingml.document"));
+
+        KnowledgeDocument document = new KnowledgeDocument();
+        document.setDocId(42L);
+        document.setCurrentVersionId(7L);
+        document.setDocTitle("report.docx");
+        document.setStatus(DocumentStatus.UPLOADED);
+        KnowledgeDocumentVersion version = new KnowledgeDocumentVersion();
+        version.setVersionId(7L);
+        version.setDocUrl("source-url");
+        when(documents.selectById(42L)).thenReturn(document);
+        when(versions.selectById(7L)).thenReturn(version);
+        when(minio.objectName("source-url")).thenReturn("source");
+        when(minio.downloadBytes("source")).thenReturn(new byte[]{1, 2, 3});
+        when(lock.execute(eq(42L), any())).thenAnswer(invocation -> invocation.<Callable<Boolean>>getArgument(1).call());
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(output)) {
+            zip.putNextEntry(new ZipEntry("report.md"));
+            zip.write("# Word heading\nBody".getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+        }
+        when(mineru.parseToZip(eq("report.docx"), any())).thenReturn(output.toByteArray());
+        new DocumentIngestService(mineru, minio, mock(VisionService.class), events, lock, documents, versions)
+                .convert(42L);
+        verify(minio).upload(eq("42/7/report.md"), eq("# Word heading\nBody".getBytes(StandardCharsets.UTF_8)),
+                eq("text/markdown"));
+        verify(events).publishEvent(new DocumentEvents.Converted(42L));
+        verify(versions, atLeastOnce()).updateById(org.mockito.ArgumentMatchers.<KnowledgeDocumentVersion>argThat(v ->
+                v.getStatus() == DocumentStatus.CONVERTED && "source-url".equals(v.getConvertedDocUrl())));
     }
 }

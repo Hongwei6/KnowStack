@@ -33,7 +33,7 @@ public class DocumentEventListener {
         } catch (DocumentProcessingLock.DocumentBusyException e) {
             log.debug("文档正在处理，忽略重复上传事件 docId={}", event.documentId());
         } catch (Exception e) {
-            log.error("PDF 转换失败 docId={}", event.documentId(), e);
+            log.error("文档转换失败 docId={}", event.documentId(), e);
         }
     }
 

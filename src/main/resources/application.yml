@@ -63,7 +63,7 @@ minio:
   secret-key: ${MINIO_SECRET_KEY}
   bucket: knowstack
 
-# MinerU 4.1.5 自托管 API（Yoga，/v1/tasks 创建任务、上传 PDF、下载 ZIP）
+# MinerU 4.1.5 自托管 API（Yoga，/v1/tasks 创建任务、上传 PDF/Word、下载 ZIP）
 mineru:
   base-url: http://${MINERU_HOST:10.244.0.110}:8000
 
