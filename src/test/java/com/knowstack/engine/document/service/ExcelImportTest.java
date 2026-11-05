@@ -210,4 +210,74 @@ class ExcelImportTest {
         verify(versions, atLeastOnce()).updateById(org.mockito.ArgumentMatchers.<KnowledgeDocumentVersion>argThat(v ->
                 v.getStatus() == DocumentStatus.CONVERTED && "source-url".equals(v.getConvertedDocUrl())));
     }
+
+    @Test
+    void markdownUploadDownloadsReferencedUrlImagesAndRewritesToMinio() throws Exception {
+        byte[] png = new byte[]{1, 'P', 'N', 'G'};
+        com.sun.net.httpserver.HttpServer server = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress(0), 0);
+        server.createContext("/img/shot.png", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, png.length);
+            exchange.getResponseBody().write(png);
+            exchange.close();
+        });
+        server.start();
+        int port = server.getAddress().getPort();
+        try {
+            MinioService minio = mock(MinioService.class);
+            ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+            KnowledgeDocumentMapper documents = mock(KnowledgeDocumentMapper.class);
+            KnowledgeDocumentVersionMapper versions = mock(KnowledgeDocumentVersionMapper.class);
+            DocumentProcessingLock lock = mock(DocumentProcessingLock.class);
+            VisionService vision = mock(VisionService.class);
+            when(documents.insert(any(KnowledgeDocument.class))).thenAnswer(invocation -> {
+                invocation.<KnowledgeDocument>getArgument(0).setDocId(9L);
+                return 1;
+            });
+            when(versions.insert(any(KnowledgeDocumentVersion.class))).thenAnswer(invocation -> {
+                invocation.<KnowledgeDocumentVersion>getArgument(0).setVersionId(3L);
+                return 1;
+            });
+            String imageUrl = "http://127.0.0.1:" + port + "/img/shot.png";
+            String markdown = "# 标题\n\n![截图](" + imageUrl + ") 与失效链接 ![坏](http://127.0.0.1:1/dead.png)\n";
+            var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(minio,
+                    mock(ExcelProcessServiceImpl.class), events, mock(DocumentSplitService.class),
+                    documents, versions, mock(KnowledgeSegmentMapper.class))).build();
+            mvc.perform(multipart("/api/documents/upload")
+                            .file(new MockMultipartFile("file", "notes.md", "text/markdown",
+                                    markdown.getBytes(StandardCharsets.UTF_8)))
+                            .param("uploadUser", "alice"))
+                    .andExpect(status().isOk());
+            verify(events, times(1)).publishEvent(any(DocumentEvents.Uploaded.class));
+
+            KnowledgeDocument document = new KnowledgeDocument();
+            document.setDocId(9L);
+            document.setCurrentVersionId(3L);
+            document.setDocTitle("notes.md");
+            document.setStatus(DocumentStatus.UPLOADED);
+            KnowledgeDocumentVersion version = new KnowledgeDocumentVersion();
+            version.setVersionId(3L);
+            version.setDocUrl("http://minio/knowstack/abc123/source/notes.md");
+            when(documents.selectById(9L)).thenReturn(document);
+            when(versions.selectById(3L)).thenReturn(version);
+            when(minio.objectName("http://minio/knowstack/abc123/source/notes.md"))
+                    .thenReturn("abc123/source/notes.md");
+            when(minio.downloadBytes("abc123/source/notes.md")).thenReturn(markdown.getBytes(StandardCharsets.UTF_8));
+            when(minio.upload(eq("9/3/images/shot.png"), eq(png), eq("image/png"))).thenReturn("image-url");
+            when(minio.upload(eq("9/3/notes.md"), any(byte[].class), eq("text/markdown"))).thenReturn("converted-url");
+            when(vision.describe(png, "image/png")).thenReturn("架构图：MinIO 与 MinerU");
+            when(lock.execute(eq(9L), any())).thenAnswer(invocation -> invocation.<Callable<Boolean>>getArgument(1).call());
+            new DocumentIngestService(mock(MineruClient.class), minio, vision, events, lock, documents, versions)
+                    .convert(9L);
+            ArgumentCaptor<byte[]> saved = ArgumentCaptor.forClass(byte[].class);
+            verify(minio).upload(eq("9/3/notes.md"), saved.capture(), eq("text/markdown"));
+            assertThat(new String(saved.getValue(), StandardCharsets.UTF_8))
+                    .contains("![架构图：MinIO 与 MinerU](image-url)")
+                    .contains("![坏](http://127.0.0.1:1/dead.png)")
+                    .doesNotContain(imageUrl);
+            verify(events).publishEvent(new DocumentEvents.Converted(9L));
+        } finally {
+            server.stop(0);
+        }
+    }
 }

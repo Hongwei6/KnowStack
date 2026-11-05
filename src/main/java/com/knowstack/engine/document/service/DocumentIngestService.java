@@ -23,15 +23,22 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 
 /**
- * 上传事件触发 PDF/Word 转换；成功后发布转换事件，切分与向量化由各自监听器处理。
+ * 上传事件触发 PDF/Word/Markdown 转换；成功后发布转换事件，切分与向量化由各自监听器处理。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class DocumentIngestService {
 
+    private static final HttpClient HTTP = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+    private static final int MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     private static final Pattern IMAGE_TAG = Pattern.compile("!\\[(.*?)]\\(([^)]+)\\)");
 
     private final MineruClient mineruClient;
@@ -68,21 +75,30 @@ public class DocumentIngestService {
         String storageKey = docId + "/" + versionId;
         updateStatus(docId, versionId, DocumentStatus.CONVERTING, null);
 
-        // 1. MinerU 解析为 ZIP（Markdown + 图片）
-        Map<String, byte[]> entries = unzip(mineruClient.parseToZip(fileName, content));
-        String markdown = extractMarkdown(entries);
+        // 1. 取 Markdown 与图片：.md 直接读原文并下载文中 URL 引用的图片；PDF/Word 走 MinerU 解析 ZIP
+        String markdown;
+        Map<String, byte[]> imageEntries = new LinkedHashMap<>();
+        if (fileName.toLowerCase(Locale.ROOT).endsWith(".md")) {
+            markdown = new String(content, StandardCharsets.UTF_8);
+            fetchRemoteImages(markdown, imageEntries);
+        } else {
+            Map<String, byte[]> entries = unzip(mineruClient.parseToZip(fileName, content));
+            markdown = extractMarkdown(entries);
+            for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+                if (isImage(entry.getKey())) {
+                    imageEntries.put(simpleName(entry.getKey()), entry.getValue());
+                }
+            }
+        }
         if (markdown == null || markdown.isBlank()) {
-            throw new IOException("MinerU 解析结果中没有 Markdown 内容");
+            throw new IOException("文档没有可用的 Markdown 内容");
         }
 
         // 2. 图片上传 MinIO，视觉模型生成描述，并把相对路径替换为可访问的 MinIO URL
         Map<String, String> imageUrls = new HashMap<>();
         Map<String, String> imageAlts = new HashMap<>();
-        for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
-            String imageName = simpleName(entry.getKey());
-            if (!isImage(imageName)) {
-                continue;
-            }
+        for (Map.Entry<String, byte[]> entry : imageEntries.entrySet()) {
+            String imageName = entry.getKey();
             String mimeType = imageMimeType(imageName);
             String url = minioService.upload(storageKey + "/images/" + imageName, entry.getValue(), mimeType);
             imageUrls.put(imageName, url);
@@ -92,12 +108,42 @@ public class DocumentIngestService {
         log.info("文档 docId={} 图片处理完成，共 {} 张", docId, imageUrls.size());
 
         // 3. Markdown 上传 MinIO，状态推进 CONVERTED
-        String mdName = fileName.replaceAll("(?i)\\.(pdf|docx?)$", "") + ".md";
+        String mdName = fileName.replaceAll("(?i)\\.(pdf|docx?|md)$", "") + ".md";
         String mdUrl = minioService.upload(storageKey + "/" + mdName, markdown.getBytes(StandardCharsets.UTF_8), "text/markdown");
         updateStatus(docId, versionId, DocumentStatus.CONVERTED, mdUrl);
 
         log.info("文档 docId={} 转换完成", docId);
         return true;
+    }
+
+    /**
+     * 下载 Markdown 中以 URL 引用的图片（ponytail: 按文件名去重，同名 URL 共用一张；失败保留原链接不阻断流程）。
+     */
+    private void fetchRemoteImages(String markdown, Map<String, byte[]> images) {
+        Matcher refs = IMAGE_TAG.matcher(markdown);
+        while (refs.find()) {
+            String url = refs.group(2);
+            if (!(url.startsWith("http://") || url.startsWith("https://"))) {
+                continue;
+            }
+            String name = simpleName(url);
+            if (!isImage(name) || images.containsKey(name)) {
+                continue;
+            }
+            try {
+                HttpResponse<byte[]> response = HTTP.send(HttpRequest.newBuilder(URI.create(url))
+                                .timeout(Duration.ofSeconds(20)).GET().build(),
+                        HttpResponse.BodyHandlers.ofByteArray());
+                if (response.statusCode() != 200 || response.body() == null || response.body().length == 0
+                        || response.body().length > MAX_IMAGE_BYTES) {
+                    log.warn("Markdown 图片下载失败 status={} url={}", response.statusCode(), url);
+                    continue;
+                }
+                images.put(name, response.body());
+            } catch (Exception e) {
+                log.warn("Markdown 图片下载失败，保留原链接: {} ({})", url, e.getMessage());
+            }
+        }
     }
 
     private void updateStatus(Long docId, Long versionId, DocumentStatus status, String convertedDocUrl) {

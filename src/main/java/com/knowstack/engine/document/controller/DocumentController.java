@@ -62,7 +62,7 @@ public class DocumentController {
     /**
      * 文件上传接口
      *
-     * @param file         上传的 PDF、Word 或表格文件
+     * @param file         上传的 PDF、Word、Markdown 或表格文件
      * @param uploadUser   上传用户
      * @param accessibleBy 可见范围（可选）
      * @return 保存后的文档记录（异步流水线随后推进状态）
@@ -80,18 +80,22 @@ public class DocumentController {
                 && fileName.toLowerCase(Locale.ROOT).matches(".*\\.(xls|xlsx|xlsm|xlt|xltx|xltm)"))) {
             return uploadExcel(file, uploadUser, accessibleBy, fileName);
         }
-        if (fileType != FileType.PDF && fileType != FileType.DOC) {
-            throw new IllegalArgumentException("仅支持 PDF、Word、CSV 或 Excel 表格文件: " + fileName);
+        if (fileType != FileType.PDF && fileType != FileType.DOC && fileType != FileType.MARKDOWN) {
+            throw new IllegalArgumentException("仅支持 PDF、Word、Markdown、CSV 或 Excel 表格文件: " + fileName);
         }
         String lowerName = fileName.toLowerCase(Locale.ROOT);
         if (fileType == FileType.DOC && !lowerName.matches(".*\\.(doc|docx)")) {
             throw new IllegalArgumentException("Word 文件须为 .doc 或 .docx: " + fileName);
+        }
+        if (fileType == FileType.MARKDOWN && !lowerName.endsWith(".md")) {
+            throw new IllegalArgumentException("Markdown 文件须为 .md: " + fileName);
         }
         byte[] content = file.getBytes();
 
         // 1. 原始文件上传 MinIO
         String storageKey = UUID.randomUUID().toString().replace("-", "");
         String contentType = fileType == FileType.PDF ? "application/pdf"
+                : fileType == FileType.MARKDOWN ? "text/markdown"
                 : lowerName.endsWith(".docx")
                 ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/msword";
         String sourceUrl = minioService.upload(storageKey + "/source/" + fileName, content, contentType);
