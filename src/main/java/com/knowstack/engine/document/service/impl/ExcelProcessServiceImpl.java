@@ -26,10 +26,8 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 /** 将 Excel 第一张工作表导入文档独占的 MySQL 表，并登记供后续查询使用的表头元数据。 */
@@ -145,24 +143,11 @@ public class ExcelProcessServiceImpl implements FileProcessService {
         return null;
     }
 
+    /** 列名固定用 col_1..col_n（原始表头保留在 TableMeta 供查询映射），不做表头转字段名。 */
     private List<ColumnInfo> columns(List<String> headers) {
-        Set<String> used = new HashSet<>();
-        used.add("id");
         List<ColumnInfo> columns = new ArrayList<>(headers.size());
         for (int i = 0; i < headers.size(); i++) {
-            String header = headers.get(i);
-            String base = header == null ? "" : header.trim().replaceAll("[\\p{Cntrl}]", "_");
-            if (base.isBlank()) {
-                base = "col_" + (i + 1);
-            }
-            base = base.substring(0, Math.min(base.length(), 60)).stripTrailing();
-            String name = base;
-            int suffix = 2;
-            while (!used.add(name.toLowerCase(java.util.Locale.ROOT))) {
-                String ending = "_" + suffix++;
-                name = base.substring(0, Math.min(base.length(), 64 - ending.length())) + ending;
-            }
-            columns.add(new ColumnInfo(i, header, name, "TEXT"));
+            columns.add(new ColumnInfo(i, headers.get(i), "col_" + (i + 1), "TEXT"));
         }
         return columns;
     }

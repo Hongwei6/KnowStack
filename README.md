@@ -65,4 +65,4 @@ XXL-Job 只扫描状态并补发事件，不在扫描器内执行转换、切分
 
 表格入库：统一使用 `POST /api/documents/upload`；后端识别 PDF/Word/Markdown/TXT 走文档解析流水线，Excel `.xls/.xlsx/.xlsm/.xlt/.xltx/.xltm` 与 UTF-8 `.csv` 走 MySQL 导入。CSV 按 RFC 4180 解析引号、逗号、跨行字段和 UTF-8 BOM；原文件存 MinIO，Excel 首张工作表或 CSV 的首行作为表头，其余行写入 `custom_data_query_<docId>`，列元数据写入 `table_meta`；成功状态为 `STORED`。`.xlsb` 二进制工作簿尚未支持。尚无 Text2SQL 查询接口。MySQL 建表隐式提交，失败时清理新表，但可能保留 `INIT` 文档记录。
 
-新导入表的字段名直接取表头（支持中文），用反引号转义特殊字符；重复表头追加 `_2`，空表头生成 `col_<序号>`，与主键 `id` 冲突的表头改为 `id_2`。`table_meta.columns_info` 保留原表头与实际字段名。**已创建的表不会自动改名**：例如 `custom_data_query_11` 仍保留 `col_1` 等旧列，需先核对其原始表头与现有查询依赖，再手动迁移或重新上传。
+新导入表的字段名固定为 `col_1`、`col_2`…（**不再用表头作为字段名**）；原始表头保留在 `table_meta.columns_info` 中供查询时映射。**已创建的表不会自动改名**：例如早期以表头命名的列仍保留，需核对其原始表头与现有查询依赖后再手动迁移或重新上传。
