@@ -6,6 +6,7 @@ import com.knowstack.engine.document.entity.KnowledgeSegment;
 import com.knowstack.engine.document.entity.SplitOptions;
 import com.knowstack.engine.document.mapper.KnowledgeDocumentMapper;
 import com.knowstack.engine.document.mapper.KnowledgeSegmentMapper;
+import com.knowstack.engine.document.service.DocumentHistoryService;
 import com.knowstack.engine.document.service.DocumentProcessingLock;
 import com.knowstack.engine.document.service.DocumentSplitService;
 import com.knowstack.engine.document.service.DocumentUploadService;
@@ -13,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,6 +41,7 @@ public class DocumentController {
     private final DocumentSplitService splitService;
     private final KnowledgeDocumentMapper documentMapper;
     private final KnowledgeSegmentMapper segmentMapper;
+    private final DocumentHistoryService historyService;
 
     /**
      * 文件上传接口（业务见 DocumentUploadService：类型路由、MinIO 存储、事件发布）
@@ -91,6 +94,19 @@ public class DocumentController {
         return segmentMapper.selectList(new LambdaQueryWrapper<KnowledgeSegment>()
                 .eq(KnowledgeSegment::getDocumentId, documentId)
                 .orderByAsc(KnowledgeSegment::getChunkOrder));
+    }
+
+    @GetMapping
+    public DocumentHistoryService.DocumentPage history(
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return historyService.list(page, size);
+    }
+
+    @DeleteMapping("/{docId}")
+    public ResponseEntity<Void> delete(@PathVariable Long docId) {
+        historyService.delete(docId);
+        return ResponseEntity.noContent().build();
     }
 
     /**

@@ -56,10 +56,15 @@ know-engine/
 模型由 `ai/config/AiModelConfig` 注册为 LangChain4j 的 `EmbeddingModel`、`ChatModel` 和 `StreamingChatModel`。本机 API Key 放在已忽略的 `application-local.yml`，部署时使用 `DEEPSEEK_API_KEY`；切勿提交密钥。XXL-Job 原 2.3.0 容器保留为 `xxl-job-admin-pre242`，升级前数据库备份位于 T480s 的 `~/xxl_job-before-2.4.2.sql`。
 
 PDF/Word（`.pdf/.doc/.docx`）上传：`POST /api/documents/upload` 将原文件存 MinIO、文档/版本记录写 MySQL，事务提交后发布 `Uploaded` 事件。`document/event/DocumentEventListener` 的异步处理器接力：`Uploaded` → MinerU 解析为 Markdown（含图片描述与存储）→ `Converted` → `DocumentSplitService` 保存有序父子分段 → `Chunked` → `SegmentEmbeddingService` 写 Elasticsearch，状态到 `VECTOR_STORED`。Markdown（`.md`）/TXT（`.txt`）跳过 MinerU 直接进入同流水线：正文即源文件，`![...](http…)` 引用的远程图片在转换阶段被下载（单张 ≤10MB）、上传 MinIO `<docId>/<versionId>/images/` 并用视觉模型生成描述、把链接替换为 MinIO 地址；下载失败或非 URL 引用保留原样。切分方式可由前端 `splitType` 参数选择（SMART/TITLE/LENGTH/SEPARATOR/REGEX，TITLE 可带 `titleLevel`、SEPARATOR 带 `separator`、REGEX 带 `regex`），未传时 TXT 默认 LENGTH、其余默认 SMART（标题+父子分段）；`POST /api/documents/split/{id}` 手动重切同样接受这些参数。事件只携带文档 ID，原始文件从 MinIO 读取；每阶段按持久化状态幂等判定，同一文档使用 Redisson 锁 `document:processing:{id}`。`document/job/DocumentStageRecoveryJob` 由 XXL-Job 触发，扫描超时状态并补发事件（上传/转换/分段超过 1 分钟，转换中超过 15 分钟）；进程内事件不依赖消息队列，数据库状态负责重启补偿。手动切分遇占用返回 HTTP 409，切分事务提交后再发 `Chunked` 事件。
+MinerU 客户端总等待上限为 10 分钟；文件状态为 `running` 且任务 `progress.completed/failed` 持续为 0 超过 5 分钟时提前报错（排队 `pending` 不计入）。这仅缩短卡住时的等待，不会重启服务端 worker；API `/v1/health` 正常也不代表队列正常消费。
+图片视觉描述同样尽力而为:单次请求 3 分钟超时且不重试(`AiModelConfig` 中 `visionChatModel` 的 `maxRetries(0)`),超时/失败回退默认 alt"图片"。MinerU 与 Ollama 视觉模型共用 Yoga 的 GPU,同时解析大 PDF 会让 qwen3-vl 显著变慢,属预期现象而非故障。
 
-XXL-Job Admin 已创建并启用自动注册执行器 `know-engine` 下的 BEAN 任务 `documentStageRecovery`，Cron `0 * * * * ?`（每分钟一次），阻塞策略“单机串行”。`config/XxlJobConfig` 注册执行器（默认端口 `9999`）；Admin 必须能回连该端口。多网卡/代理环境用 `XXL_JOB_EXECUTOR_IP` 指定 Admin 可达的 IP，避免自动注册到代理地址。Admin 未配置/任务未启动时**不会**自动补发。通过 Admin 的“执行一次”和调度日志核验任务运行，阶段处理结果仍以应用日志及文档状态为准。
+
+XXL-Job Admin 已创建并启用自动注册执行器 `know-engine` 下的 BEAN 任务 `documentStageRecovery`，Cron `0 * * * * ?`（每分钟一次），阻塞策略“单机串行”。`config/XxlJobConfig` 注册执行器（默认端口 `9999`）；Admin 必须能回连该端口。多网卡/代理环境用 `XXL_JOB_EXECUTOR_IP` 指定 Admin 可达的 IP，避免自动注册到代理地址。执行器日志默认写入 `${user.home}/.knowstack/xxl-job`（可用 `XXL_JOB_LOG_PATH` 覆盖），避免 XXL-Job 在非 Linux 环境写默认 `/data/applogs` 失败。Admin 未配置/任务未启动时**不会**自动补发。通过 Admin 的“执行一次”和调度日志核验任务运行，阶段处理结果仍以应用日志及文档状态为准。
 
 XXL-Job 只扫描状态并补发事件，不在扫描器内执行转换、切分或向量化。补发事件与实时 listener 撞车时，处理阶段共用 `document:processing:{id}` 的 Redisson 非阻塞锁：拿不到锁就跳过本次重复事件，下次定时扫描仍可补偿未完成的持久化状态；拿到锁后重新读取文档状态再决定是否执行。切分事务在持锁期间提交，不靠对扫描器或用户单独加锁。
+
+历史文档：`GET /api/documents?page=1&size=20` 按创建时间倒序分页（`size` 最大 100，包含总数）；上传页面可查看、翻页和删除。`DELETE /api/documents/{id}` 在文档处理锁内物理删除全部版本/分段、表元数据、该文档的 `custom_data_query_<id>` 表、MinIO 原文件及 `<id>/` 下转换文件/图片，并按分段 ID 清理 ES 向量；处理中的文档返回 409。跨 MySQL、MinIO、ES 不存在统一事务：外部资源清理失败时保留文档记录以便重试，已清理的资源不会自动恢复。
 
 切分时父子段和无内置 ID 的普通切分段统一生成雪花 `chunkId`；子段 `metadata.parentChunkId` 指向已保存的父段 ID，向量 ID 使用子段 `chunkId`。多实例部署必须为每个实例设置不同的 `SNOWFLAKE_WORKER_ID`（0–1023，重启后也不能与同时运行的实例重复）；未设置时按 PID 低 10 位回退，仅适合单实例开发。`sql/tables.sql` 对新建库设 `chunk_id NOT NULL UNIQUE`；已建库不会自动改表，先检查历史空值/重复值及 ES 向量引用，必要时重切旧文档，再手动加唯一索引，不能直接对旧段改 ID 而不更新向量引用。
 

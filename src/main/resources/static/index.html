@@ -26,6 +26,12 @@
   @keyframes pulse { from { opacity:.4; } to { opacity:1; } }
   .meta { font-size:12px; color:var(--muted); margin-top:10px; }
   a { color: var(--accent); }
+  .history { margin-top:18px; }
+  .history-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .history-row span { flex:1; overflow-wrap:anywhere; }
+  button.small { width:auto; margin:0; padding:6px 10px; font-size:13px; }
+  button.danger { background:#dc2626; }
+  .pager { display:flex; align-items:center; justify-content:space-between; margin-top:12px; }
 </style>
 </head>
 <body>
@@ -59,12 +65,23 @@
       <div class="meta" id="meta"></div>
     </div>
   </div>
+  <div class="card history">
+    <h2>历史文档</h2>
+    <div id="historyMessage" class="msg"></div>
+    <div id="historyList"></div>
+    <div class="pager">
+      <button class="small" id="previous" type="button">上一页</button>
+      <span id="pageInfo"></span>
+      <button class="small" id="next" type="button">下一页</button>
+    </div>
+  </div>
 </div>
 <script>
 const STAGES = ["UPLOADED","CONVERTING","CONVERTED","CHUNKED","VECTOR_STORED"];
 const STAGE_LABEL = {
-  UPLOADED:"上传完成（MinIO）", CONVERTING:"MinerU 解析为 Markdown（含图片）",
-  CONVERTED:"转换完成", CHUNKED:"分块完成", VECTOR_STORED:"向量化并写入向量库"
+  INIT:"待上传", UPLOADED:"上传完成", CONVERTING:"转换中",
+  CONVERTED:"转换完成", CHUNKED:"分块完成", VECTOR_STORED:"向量存储完成",
+  STORED:"存储完成"
 };
 const $ = id => document.getElementById(id);
 
@@ -92,6 +109,7 @@ $("uploadForm").addEventListener("submit", async e => {
     const res = await fetch("/api/documents/upload", { method: "POST", body });
     const doc = await res.json();
     if (!res.ok) throw new Error(doc.error || ("HTTP " + res.status));
+    loadHistory();
     if (doc.status === "STORED") {
       $("msg").textContent = "表格已导入 MySQL，docId=" + doc.docId + "（SQL 查询功能暂未接入）";
       $("btn").disabled = false;
@@ -137,6 +155,54 @@ function render(doc) {
   const created = doc.createdAt ? "，开始于 " + doc.createdAt.replace("T", " ").slice(0, 19) : "";
   $("meta").textContent = "文档：" + doc.docTitle + created;
 }
+
+let historyPage = 1;
+async function loadHistory() {
+  try {
+    const response = await fetch("/api/documents?page=" + historyPage + "&size=20");
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+    const list = $("historyList");
+    list.replaceChildren();
+    for (const doc of data.items) {
+      const row = document.createElement("div");
+      row.className = "history-row";
+      const text = document.createElement("span");
+      text.textContent = `#${doc.docId} ${doc.docTitle} · ${STAGE_LABEL[doc.status] || "未知状态"} · ${doc.createdAt?.replace("T", " ").slice(0, 19) || ""}`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "small danger";
+      button.textContent = "删除";
+      button.addEventListener("click", async () => {
+        if (!confirm(`永久删除「${doc.docTitle}」及所有文件、表和向量？此操作不可撤销。`)) return;
+        button.disabled = true;
+        try {
+          const result = await fetch("/api/documents/" + doc.docId, { method: "DELETE" });
+          if (!result.ok) throw new Error((await result.json()).error || ("HTTP " + result.status));
+          await loadHistory();
+          $("historyMessage").textContent = "文档 #" + doc.docId + " 已物理删除";
+        } catch (err) {
+          $("historyMessage").className = "msg error";
+          $("historyMessage").textContent = "删除失败：" + err.message;
+          button.disabled = false;
+        }
+      });
+      row.append(text, button);
+      list.append(row);
+    }
+    $("pageInfo").textContent = `第 ${data.page} 页 · 共 ${data.total} 条`;
+    $("previous").disabled = historyPage === 1;
+    $("next").disabled = historyPage * data.size >= data.total;
+    $("historyMessage").textContent = "";
+    $("historyMessage").className = "msg";
+  } catch (err) {
+    $("historyMessage").className = "msg error";
+    $("historyMessage").textContent = "查询失败：" + err.message;
+  }
+}
+$("previous").onclick = () => { historyPage--; loadHistory(); };
+$("next").onclick = () => { historyPage++; loadHistory(); };
+loadHistory();
 
 $("splitType").addEventListener("change", e => {
   $("titleLevel").hidden = e.target.value !== "TITLE";

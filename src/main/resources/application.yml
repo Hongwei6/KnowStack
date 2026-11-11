@@ -81,6 +81,7 @@ xxl:
       appname: know-engine
       port: 9999
       ip: ${XXL_JOB_EXECUTOR_IP:} # Admin 可达的执行器地址；多网卡/代理环境需显式指定
+      logpath: ${XXL_JOB_LOG_PATH:${user.home}/.knowstack/xxl-job}
     accessToken: default_token
 
 # Yoga Ollama（1024 维；现有 1536 维 ES 索引需重建后才能写入）

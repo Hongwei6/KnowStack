@@ -93,7 +93,7 @@ class DocumentProcessingLockTest {
                 new DocumentUploadService(minioService,
                         mock(com.knowstack.engine.document.service.impl.ExcelProcessServiceImpl.class),
                         events, documentMapper, versionMapper),
-                splitService, documentMapper, segmentMapper)).build();
+                splitService, documentMapper, segmentMapper, mock(DocumentHistoryService.class))).build();
 
         CountDownLatch entered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);

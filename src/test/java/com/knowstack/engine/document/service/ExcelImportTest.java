@@ -128,7 +128,8 @@ class ExcelImportTest {
         });
         var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
                 new DocumentUploadService(minio, processor, events, documents, versions),
-                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class),
+                mock(DocumentHistoryService.class))).build();
         mvc.perform(multipart("/api/documents/upload")
                         .file(new MockMultipartFile("file", "报价.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12", workbook()))
                         .param("uploadUser", "alice"))
@@ -166,7 +167,8 @@ class ExcelImportTest {
         when(minio.upload(any(), any(), any())).thenReturn("source-url");
         var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
                 new DocumentUploadService(minio, processor, events, documents, versions),
-                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class),
+                mock(DocumentHistoryService.class))).build();
         for (String extension : List.of("doc", "docx")) {
             mvc.perform(multipart("/api/documents/upload")
                             .file(new MockMultipartFile("file", "report." + extension, "application/octet-stream",
@@ -244,7 +246,8 @@ class ExcelImportTest {
             String markdown = "# 标题\n\n![截图](" + imageUrl + ") 与失效链接 ![坏](http://127.0.0.1:1/dead.png)\n";
             var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
                     new DocumentUploadService(minio, mock(ExcelProcessServiceImpl.class), events, documents, versions),
-                    mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
+                    mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class),
+                    mock(DocumentHistoryService.class))).build();
             mvc.perform(multipart("/api/documents/upload")
                             .file(new MockMultipartFile("file", "notes.md", "text/markdown",
                                     markdown.getBytes(StandardCharsets.UTF_8)))
@@ -300,7 +303,8 @@ class ExcelImportTest {
         });
         var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
                 new DocumentUploadService(minio, mock(ExcelProcessServiceImpl.class), events, documents, versions),
-                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class),
+                mock(DocumentHistoryService.class))).build();
         byte[] text = "纯文本内容，无标题结构。".getBytes(StandardCharsets.UTF_8);
         mvc.perform(multipart("/api/documents/upload")
                         .file(new MockMultipartFile("file", "notes.txt", "text/plain", text))
@@ -351,7 +355,8 @@ class ExcelImportTest {
         });
         var mvc = MockMvcBuilders.standaloneSetup(new DocumentController(
                 new DocumentUploadService(minio, mock(ExcelProcessServiceImpl.class), events, documents, versions),
-                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class))).build();
+                mock(DocumentSplitService.class), documents, mock(KnowledgeSegmentMapper.class),
+                mock(DocumentHistoryService.class))).build();
         mvc.perform(multipart("/api/documents/upload")
                         .file(new MockMultipartFile("file", "doc.md", "text/markdown", "# h\nbody".getBytes()))
                         .param("uploadUser", "alice")

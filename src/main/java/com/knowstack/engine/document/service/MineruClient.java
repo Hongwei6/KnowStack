@@ -2,6 +2,7 @@ package com.knowstack.engine.document.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -18,13 +19,21 @@ import java.util.Map;
 @Service
 public class MineruClient {
 
+    private static final Duration STALL_TIMEOUT = Duration.ofMinutes(5);
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ObjectMapper mapper;
     private final String baseUrl;
+    private final Duration stallTimeout;
 
+    @Autowired
     public MineruClient(@Value("${mineru.base-url}") String baseUrl, ObjectMapper mapper) {
+        this(baseUrl, mapper, STALL_TIMEOUT);
+    }
+
+    MineruClient(String baseUrl, ObjectMapper mapper, Duration stallTimeout) {
         this.baseUrl = baseUrl.replaceAll("/+$", "");
         this.mapper = mapper;
+        this.stallTimeout = stallTimeout;
     }
 
     public byte[] parseToZip(String fileName, byte[] content) {
@@ -48,6 +57,7 @@ public class MineruClient {
             response(uploadRequest.build(), 200);
 
             long deadline = System.nanoTime() + Duration.ofMinutes(10).toNanos();
+            long runningWithoutProgressSince = 0;
             while (System.nanoTime() < deadline) {
                 JsonNode task = json(HttpRequest.newBuilder(uri("/v1/tasks/" + taskId))
                         .timeout(Duration.ofSeconds(15)).GET().build(), 200);
@@ -63,6 +73,18 @@ public class MineruClient {
                 }
                 if ("failed".equals(task.path("status").asText()) || "canceled".equals(task.path("status").asText())) {
                     throw new IOException("MinerU 任务失败: " + task.path("error"));
+                }
+                boolean stalled = "running".equals(file.path("status").asText())
+                        && task.path("progress").path("completed").asInt() == 0
+                        && task.path("progress").path("failed").asInt() == 0;
+                if (stalled) {
+                    if (runningWithoutProgressSince == 0) {
+                        runningWithoutProgressSince = System.nanoTime();
+                    } else if (System.nanoTime() - runningWithoutProgressSince >= stallTimeout.toNanos()) {
+                        throw new IOException("MinerU 任务运行中无进度超过 " + stallTimeout + ": " + taskId);
+                    }
+                } else {
+                    runningWithoutProgressSince = 0;
                 }
                 Thread.sleep(2000);
             }

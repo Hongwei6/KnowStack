@@ -57,6 +57,9 @@ public class AiModelConfig {
                 .modelName(model)
                 .maxTokens(2048)
                 .timeout(Duration.ofMinutes(3))
+                // 视觉描述是尽力而为(Yoga 上 MinerU 与 Ollama 共用 GPU,慢时单图可超 3 分钟):
+                // 超时不重试,失败走默认 alt,避免一张图阻塞流水线最长 9 分钟
+                .maxRetries(0)
                 .build();
     }
 }

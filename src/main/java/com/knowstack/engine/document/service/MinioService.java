@@ -6,6 +6,8 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.SetBucketPolicyArgs;
+import io.minio.ListObjectsArgs;
+import io.minio.RemoveObjectArgs;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -84,6 +86,26 @@ public class MinioService {
             throw new IllegalArgumentException("无法解析文档URL: " + url);
         }
         return url.substring(prefix.length());
+    }
+
+    public void removeObject(String objectName) {
+        try {
+            client.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(objectName).build());
+        } catch (Exception e) {
+            throw new IllegalStateException("MinIO 删除失败: " + objectName, e);
+        }
+    }
+
+    /** 清理转换文件与图片；不依赖版本 URL，覆盖转换中断产生的孤儿对象。 */
+    public void removePrefix(String prefix) {
+        try {
+            for (var result : client.listObjects(ListObjectsArgs.builder()
+                    .bucket(bucket).prefix(prefix).recursive(true).build())) {
+                removeObject(result.get().objectName());
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("MinIO 前缀清理失败: " + prefix, e);
+        }
     }
 
     /**
